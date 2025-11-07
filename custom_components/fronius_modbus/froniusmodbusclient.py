@@ -98,9 +98,9 @@ class FroniusModbusClient(ExtModbusClient):
                     if not self.meter_configured:
                         self.meter_configured = True
                 else:
-                    _LOGGER.error(f"Failed reading meter info unit id: {unit_id}")
+                    _LOGGER.error(f"Failed reading meter info {self._host}:{self._port} unit id: {unit_id}")
             except Exception as e:
-                _LOGGER.error(f"Error reading meter info unit id: {unit_id}", exc_info=True)
+                _LOGGER.error(f"Error reading meter info {self._host}:{self._port} unit id: {unit_id}", exc_info=True)
 
         if await self.read_inverter_nameplate_data() == False:
             _LOGGER.error(f"Error reading nameplate data", exc_info=True)
