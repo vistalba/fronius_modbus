@@ -122,7 +122,7 @@ To come!
 | Export Limit Enable | Allows limiting of inverter export to grid. Enable this setting first, and after set the export limit in setting below. |
 | Export Limit Rate | This setting in Watts allows setting how much solar can be exported to the grid. Setting seems to take this as a maximum, and it wont be exactly this, likely a bit less.  |
 
-# Example Devices (Outdated screenshots!)
+# Example Devices
 
 Battery Storage
 ![battery storage](images/example_batterystorage.jpg?raw=true "storage")
