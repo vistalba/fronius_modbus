@@ -635,37 +635,43 @@ class FroniusModbusClient(ExtModbusClient):
         await self.set_charge_rate(charge_rate)
 
     async def set_grid_charge_power(self, value):
+        """value is in W from HA, store percent internally."""
         if self.storage_extended_control_mode == 4:
             await self.set_discharge_rate_w(value * -1)
-            self.data['grid_charge_power'] = value
+            percent = (value / self.max_charge_rate_w) * 100 if self.max_charge_rate_w else 0
+            self.data['grid_charge_power'] = percent
         else:
             return
 
     async def set_grid_discharge_power(self, value):
+        """value is in W from HA, store percent internally."""
         if self.storage_extended_control_mode == 5:
             await self.set_charge_rate_w(value * -1)
-            self.data['grid_discharge_power'] = value
+            percent = (value / self.max_discharge_rate_w) * 100 if self.max_discharge_rate_w else 0
+            self.data['grid_discharge_power'] = percent
         else:
             return
         
     async def set_charge_limit(self, value):
-        if self.storage_extended_control_mode in [1,3,6]:
-            # only change when charge limit is used
+        """value is in W from HA, store percent internally."""
+        if self.storage_extended_control_mode in [1, 3, 6]:
             await self.set_charge_rate_w(value)
-            self.data['charge_limit'] = value
-        elif self.storage_extended_control_mode in [4,5,7]:
+            percent = (value / self.max_charge_rate_w) * 100 if self.max_charge_rate_w else 0
+            self.data['charge_limit'] = percent
+        elif self.storage_extended_control_mode in [4, 5, 7]:
             return
-        elif self.storage_extended_control_mode in [0,2]:
+        elif self.storage_extended_control_mode in [0, 2]:
             return
 
     async def set_discharge_limit(self, value):
-        if self.storage_extended_control_mode in [2,3,7]:
-            # only change when discharge limit is used
+        """value is in W from HA, store percent internally."""
+        if self.storage_extended_control_mode in [2, 3, 7]:
             await self.set_discharge_rate_w(value)
-            self.data['discharge_limit'] = value
-        elif self.storage_extended_control_mode in [4,5,6]:
+            percent = (value / self.max_discharge_rate_w) * 100 if self.max_discharge_rate_w else 0
+            self.data['discharge_limit'] = percent
+        elif self.storage_extended_control_mode in [1, 4, 5, 6]:
             return
-        elif self.storage_extended_control_mode in [0,1]:
+        elif self.storage_extended_control_mode in [0]:
             return
 
     async def set_charge_rate(self, charge_rate):
@@ -718,18 +724,33 @@ class FroniusModbusClient(ExtModbusClient):
         _LOGGER.info(f"Set charge/discharge mode.")
 
     async def set_grid_charge_mode(self):
-        grid_charge_power = 0
-        discharge_rate = grid_charge_power * -1
-        await self.change_settings(mode=2, charge_limit=100, discharge_limit=discharge_rate, grid_charge_power=grid_charge_power)
+        # Keep previous grid_charge_power if available, otherwise default to 0
+        grid_charge_power = self.data.get('grid_charge_power', 0)
+
+        await self.change_settings(
+            mode=1,                # Charge
+            charge_limit=100,      # allow charging up to 100%
+            discharge_limit=0,     # no discharging in this mode
+            grid_charge_power=grid_charge_power,
+        )
         self.storage_extended_control_mode = 4
-        _LOGGER.info(f"Forced charging at {grid_charge_power}")
+        _LOGGER.info(f"Charge from grid enabled, target {grid_charge_power} W")
+
 
     async def set_grid_discharge_mode(self):
-        grid_discharge_power = 0
-        charge_rate = grid_discharge_power * -1
-        await self.change_settings(mode=1, charge_limit=charge_rate, discharge_limit=100, grid_discharge_power=grid_discharge_power)
+        # Keep previous grid_discharge_power if available, otherwise default to 0
+        grid_discharge_power = self.data.get('grid_discharge_power', 0)
+
+        await self.change_settings(
+            mode=2,                # Discharge
+            charge_limit=0,        # no charging in this mode
+            discharge_limit=100,   # allow discharging up to 100%
+            grid_discharge_power=grid_discharge_power,
+        )
         self.storage_extended_control_mode = 5
-        _LOGGER.info(f"Forced discharging to grid {grid_discharge_power}")
+        _LOGGER.info(
+            f"Discharge to grid enabled, target {grid_discharge_power} W"
+        )
 
     async def set_block_discharge_mode(self):
         charge_rate = 100
