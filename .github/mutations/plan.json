@@ -3225,5 +3225,12 @@
     "old": "        return _restriction_with(restriction, address) == restriction\n",
     "new": "        return True\n",
     "tests": "says_whether_it_already_allows"
+  },
+  {
+    "label": "upgrade contract: an entity of 1.4.1 moves to another unique id",
+    "path": "custom_components/fronius_modbus/const.py",
+    "old": "ENTITY_PREFIX = \"fm\"\n",
+    "new": "ENTITY_PREFIX = \"fronius\"\n",
+    "tests": "an_entry_of_1_4_1_keeps_every_entity_and_device"
   }
 ]

@@ -38,6 +38,7 @@ GUARD_FILES = {
     "test_durations.py": "no test quietly starts taking minutes",
     "test_imports.py": "every module imports outside the author's own tree",
     "test_entity_table.py": "every legacy key is still registered and translated",
+    "test_upgrade_contract.py": "an entry of 1.4.1 keeps every entity, device and setting",
     "test_api_is_ha_free.py": "the device library imports no Home Assistant",
     "test_deprecated_constants.py": "no Home Assistant constant with an announced removal is used",
     "test_log_hygiene.py": "no log line names the device, requests is called once, an outage is not an error",
