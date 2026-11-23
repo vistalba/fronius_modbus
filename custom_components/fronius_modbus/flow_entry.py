@@ -2,59 +2,122 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_API_PASSWORD, DOMAIN, entry_title_after, entry_unique_id
-from .flow_settings import _entry_payload
+from .const import (
+    CONF_API_PASSWORD,
+    DOMAIN,
+    OPTION_KEYS,
+    entry_title_after,
+    entry_unique_id,
+)
+from .flow_settings import _entry_payload, split_entry_payload
 from .flow_state import _AlreadyConfigured
 from .token_store import async_forget_unused_tokens
 
+_LOGGER = logging.getLogger(__name__)
 
-def host_holder(
-    hass: HomeAssistant, unique_id: str
+
+def entry_with_host(
+    hass: HomeAssistant, host_id: str
 ) -> config_entries.ConfigEntry | None:
-    """The entry that holds this host: by its unique id, or by its host without one."""
-    holder = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, unique_id)
-    return holder or host_without_unique_id(hass, unique_id)
+    """The set-up entry whose configured host this is, whatever its unique id.
 
-
-def host_without_unique_id(
-    hass: HomeAssistant, unique_id: str
-) -> config_entries.ConfigEntry | None:
-    """An entry without a unique id whose host this is.
-
-    0.1.9 set no unique id and nothing gives one later; checking the unique id
-    alone let a second entry for its host through. An ignored discovery card
-    always has one.
+    The unique id is the inverter's serial number since 1.5 and the host
+    before; 0.1.9 set none. The host decides for all three.
     """
     return next(
         (
             entry
             for entry in hass.config_entries.async_entries(DOMAIN, include_ignore=False)
-            if entry.unique_id is None
-            and entry_unique_id({**entry.data, **entry.options}) == unique_id
+            if entry_unique_id({**entry.data, **entry.options}) == host_id
         ),
         None,
     )
 
 
+def host_holder(hass: HomeAssistant, host_id: str) -> config_entries.ConfigEntry | None:
+    """The entry that holds this host: one set up for it, or a card ignored for it."""
+    return entry_with_host(hass, host_id) or (
+        hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, host_id)
+    )
+
+
+def entry_storage(
+    entry: config_entries.ConfigEntry, payload: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The entry's data and options with ``payload`` written in.
+
+    The connection goes to the data, the intervals to the options. Connection
+    values an entry kept in its options before minor version 15 are dropped
+    there: they win when the entry is read and would hide the new ones.
+    """
+    connection, intervals = split_entry_payload(payload)
+    data = {**entry.data, **connection}
+    for stale in (CONF_API_PASSWORD, "meter_modbus_unit_id", "meter_modbus_unit_ids"):
+        data.pop(stale, None)
+    for key in OPTION_KEYS:
+        data.pop(key, None)
+    options = {key: value for key, value in entry.options.items() if key in OPTION_KEYS}
+    return data, options | intervals
+
+
+def unique_id_after_move(
+    entry: config_entries.ConfigEntry, settings: dict[str, Any]
+) -> str | None:
+    """The unique id an entry keeps when its host changes.
+
+    A serial number stays with the inverter wherever it moves; a host id from
+    before 1.5, or none at all, follows the host as it always did.
+    """
+    old_host_id = entry_unique_id({**entry.data, **entry.options})
+    if entry.unique_id is None or entry.unique_id == old_host_id:
+        return entry_unique_id(settings)
+    return entry.unique_id
+
+
 def _claim_host(
     hass: HomeAssistant, entry: config_entries.ConfigEntry, settings: dict[str, Any]
-) -> str:
-    """The unique id for ``settings``' host, unless another entry already holds it.
+) -> str | None:
+    """The unique id the entry keeps for ``settings``, unless another entry has the host.
 
-    The unique id is the host; a reconfigure or options change that moves the
-    host has to move the id with it, or duplicate detection keeps guarding the
-    old host and lets a second entry for the new one through.
+    The duplicate check has to follow the host: a reconfigure or options
+    change that moves it must not let a second entry for the new one through.
     """
-    unique_id = entry_unique_id(settings)
-    holder = host_holder(hass, unique_id)
+    holder = host_holder(hass, entry_unique_id(settings))
     if holder is not None and holder.entry_id != entry.entry_id:
         raise _AlreadyConfigured
-    return unique_id
+    return unique_id_after_move(entry, settings)
+
+
+@callback
+def async_adopt_serial_unique_id(
+    hass: HomeAssistant, entry: config_entries.ConfigEntry, serial: str | None
+) -> None:
+    """Give the entry its inverter's serial number as unique id, once it is read.
+
+    Entries before 1.5 carry the host, which changes. An inverter another
+    entry already claims keeps the host id: two entries for one inverter are
+    the owner's to sort out, and neither is touched.
+    """
+    serial = (serial or "").strip()
+    if not serial or entry.unique_id == serial:
+        return
+    claimed = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, serial)
+    if claimed is not None and claimed.entry_id != entry.entry_id:
+        _LOGGER.warning(
+            "Entry %s and entry %s serve the same inverter; the unique id of "
+            "%s stays as it is",
+            entry.entry_id,
+            claimed.entry_id,
+            entry.entry_id,
+        )
+        return
+    hass.config_entries.async_update_entry(entry, unique_id=serial)
 
 
 async def async_update_entry_from_input(
@@ -66,15 +129,9 @@ async def async_update_entry_from_input(
 ) -> None:
     """Write a reconfigure or reauth into the entry, and reload it once."""
     unique_id = _claim_host(hass, entry, validated_input)
-    updated_payload = _entry_payload(validated_input, reconfigure_required=False)
-    new_data = {**entry.data, **updated_payload}
-    new_options = {**entry.options, **updated_payload}
-    new_data.pop(CONF_API_PASSWORD, None)
-    new_options.pop(CONF_API_PASSWORD, None)
-    new_data.pop("meter_modbus_unit_id", None)
-    new_options.pop("meter_modbus_unit_id", None)
-    new_data.pop("meter_modbus_unit_ids", None)
-    new_options.pop("meter_modbus_unit_ids", None)
+    new_data, new_options = entry_storage(
+        entry, _entry_payload(validated_input, reconfigure_required=False)
+    )
     # Read before the update: its listener starts the reload right away.
     loaded = entry.state is config_entries.ConfigEntryState.LOADED
     changed = hass.config_entries.async_update_entry(

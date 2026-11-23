@@ -19,6 +19,9 @@ rules:
     comment: >-
       Every field has a data_description. The update intervals are not asked at
       setup; the entry starts with the defaults and Configure changes them.
+      The data holds the connection, the options the update intervals alone.
+      Configure can also change the connection, as it always could; that part
+      is written to the data.
   config-flow-test-coverage: done
   dependency-transparency:
     status: done
@@ -48,10 +51,11 @@ rules:
   test-before-configure: done
   test-before-setup: done
   unique-config-entry:
-    status: todo
+    status: done
     comment: >-
-      The flow aborts for a host another entry has, but the entry's unique id
-      is still the host instead of the inverter's serial number.
+      The unique id is the inverter's serial number; an entry from before 1.5
+      takes it at its next setup. The flow also aborts for a host another
+      entry has, whatever its unique id.
 
   # Silver
   action-exceptions: done

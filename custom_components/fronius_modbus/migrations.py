@@ -22,6 +22,7 @@ from .const import (
     CONF_METER_UNIT_IDS,
     CONF_RECONFIGURE_REQUIRED,
     DOMAIN,
+    OPTION_KEYS,
     ENTITY_PREFIX,
     MIGRATION_RECONFIGURE_ISSUE_ID_PREFIX,
     TECHNICIAN_USERNAME,
@@ -41,7 +42,10 @@ _TRANSLATIONS_DIR = Path(__file__).resolve().parent / "translations"
 _TRANSLATION_CACHE: dict[str, dict] = {}
 
 _TARGET_VERSION = 1
-_TARGET_MINOR_VERSION = 14
+# 15: the options hold the update intervals alone and the data the
+# connection. Configure wrote every setting into the options before, where
+# they shadowed the data.
+_TARGET_MINOR_VERSION = 15
 # Entries below this minor version predate the web API integration and still
 # carry the dropped meter-unit config, so only they need the data migration.
 _WEB_API_MINOR_VERSION = 9
@@ -449,18 +453,11 @@ async def _async_set_reconfigure_required(
     entry: ConfigEntry,
     required: bool,
 ) -> None:
-    new_data = dict(entry.data)
+    """Keep the flag in the data; a copy in the options would shadow it."""
+    new_data = {**entry.data, CONF_RECONFIGURE_REQUIRED: required}
     new_options = dict(entry.options)
-    changed = False
-
-    if new_data.get(CONF_RECONFIGURE_REQUIRED) != required:
-        new_data[CONF_RECONFIGURE_REQUIRED] = required
-        changed = True
-    if new_options.get(CONF_RECONFIGURE_REQUIRED) != required:
-        new_options[CONF_RECONFIGURE_REQUIRED] = required
-        changed = True
-
-    if changed:
+    new_options.pop(CONF_RECONFIGURE_REQUIRED, None)
+    if new_data != dict(entry.data) or new_options != dict(entry.options):
         hass.config_entries.async_update_entry(
             entry, data=new_data, options=new_options
         )
@@ -520,6 +517,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     elif entry.minor_version < _LIMIT_MARK_MINOR_VERSION:
         async_mark_reported(hass, entry, _REPORT_FOLLOWING_SINCE_14)
 
+    # Idempotent, so every entry that gets here can take it.
+    new_data, new_options = _split_storage(new_data, new_options)
+
     drops_a_role = entry.minor_version < _SINGLE_ROLE_MINOR_VERSION
     hass.config_entries.async_update_entry(
         entry,
@@ -534,6 +534,22 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_forget_unused_tokens(hass, str(_entry_value(entry, CONF_HOST, "")))
 
     return True
+
+
+def _split_storage(
+    data: dict[str, Any], options: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Data and options as minor 15 keeps them, with every value read as before.
+
+    An entry is read options first, then data. Each value moves to where it
+    belongs with the value that read gave, so the entry reads the same, also
+    for 1.4.1 after a downgrade: it finds every interval in the options and
+    every other setting in the data, where nothing shadows it any more.
+    """
+    merged = {**data, **options}
+    new_data = {key: value for key, value in merged.items() if key not in OPTION_KEYS}
+    new_options = {key: merged[key] for key in OPTION_KEYS if key in merged}
+    return new_data, new_options
 
 
 async def _async_stored_role(hass: HomeAssistant, entry: ConfigEntry) -> str:

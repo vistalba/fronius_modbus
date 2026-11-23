@@ -39,6 +39,7 @@ from .coordinator import (
     FroniusWebCoordinator,
 )
 from .entity import expected_device_identifiers
+from .flow_entry import async_adopt_serial_unique_id
 from .fronius_modbus_api.device import FroniusInverter
 from .froniuswebclient import FroniusWebClient
 from .meter_topology import MeterTopology, parse_meter_topology
@@ -169,6 +170,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> b
         meter_locations=locations,
     )
     await modbus.async_config_entry_first_refresh()
+    # Before the update listener is attached: the new unique id reloads nothing.
+    async_adopt_serial_unique_id(
+        hass, entry, device.identity.serial if device.identity else None
+    )
 
     meter_power = None
     grid_meter = device.meters.get(primary)

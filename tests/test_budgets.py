@@ -80,7 +80,12 @@ LINE_BUDGETS = {
     # 1108: the owner can ask for the address an allowed list skips, and the
     # model type answer keeps the address settled before it.
     # 1110 + the setup step shows the form without the update intervals.
-    "config_flow.py": 1110,
+    # 1138 + the serial number as unique id, the host check that no longer
+    # reads the host from it, and the split of data and options (1.5).
+    "config_flow.py": 1138,
+    # 908: the split of data and options and the login flag kept in the data
+    # (1.5); the migration steps belong together.
+    "migrations.py": 908,
 }
 
 # SonarSource's own default. Above it, a function is one somebody has to

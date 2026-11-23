@@ -45,7 +45,8 @@ from .flow_entry import (
     _async_reload_unless_listened,
     _claim_host,
     async_update_entry_from_input,
-    host_without_unique_id,
+    entry_storage,
+    entry_with_host,
 )
 from .flow_forms import (
     CONF_ALLOWED_HOST,
@@ -62,6 +63,7 @@ from .flow_settings import (
     _expand_settings_input,
     _should_apply_modbus_config,
     entry_defaults,
+    split_entry_payload,
 )
 from .flow_state import (
     _AddressesNotUnique,
@@ -346,7 +348,7 @@ async def _validate_input(
     if not any(identity.model.startswith(model) for model in SUPPORTED_MODELS):
         _LOGGER.warning("Untested model %s", identity.model)
 
-    return {"title": entry_title(data)}
+    return {"title": entry_title(data), "serial": identity.serial}
 
 
 class TokenFlowMixin:
@@ -786,7 +788,7 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow."""
 
     VERSION = 1
-    MINOR_VERSION = 14
+    MINOR_VERSION = 15
 
     def __init__(self) -> None:
         self._pending_flow_state = None
@@ -805,19 +807,24 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _async_claim_new_host(self, settings: dict[str, Any]) -> None:
         unique_id = entry_unique_id(settings)
-        # A card for this host gives way to the owner adding it by hand; two
-        # flows adding it by hand still stop each other.
+        self._abort_open_cards(unique_id)
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_host_held(unique_id)
+
+    def _abort_open_cards(self, unique_id: str) -> None:
+        """A card for this inverter gives way to the owner adding it by hand.
+
+        Two flows adding it by hand still stop each other.
+        """
         for card in self._async_in_progress(match_context={"unique_id": unique_id}):
             if card["context"]["source"] == config_entries.SOURCE_ZEROCONF:
                 self.hass.config_entries.flow.async_abort(card["flow_id"])
-        await self.async_set_unique_id(unique_id)
-        self._abort_if_host_held()
 
-    def _abort_if_host_held(self) -> None:
-        """Abort for a host another entry holds, with or without a unique id."""
+    def _abort_if_host_held(self, host_id: str) -> None:
+        """Abort for a host another entry is set up for, whatever its unique id."""
         # Home Assistant lets a host whose card was ignored be set up by hand.
         self._abort_if_unique_id_configured()
-        if host_without_unique_id(self.hass, str(self.unique_id)) is not None:
+        if entry_with_host(self.hass, host_id) is not None:
             raise data_entry_flow.AbortFlow("already_configured")
 
     async def _async_claim_reconfigured_host(self, settings: dict[str, Any]) -> None:
@@ -825,12 +832,18 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _async_finish_user(self, settings, info, previous_host):
         del previous_host
-        await self.async_set_unique_id(entry_unique_id(settings))
-        self._abort_if_host_held()
-        return self.async_create_entry(
-            title=info["title"],
-            data=_entry_payload(settings, reconfigure_required=False),
+        host_id = entry_unique_id(settings)
+        # The serial number stays when the inverter gets another address; the
+        # host held the flow until the inverter was read.
+        serial = str(info.get("serial") or "").strip()
+        if serial:
+            self._abort_open_cards(serial)
+        await self.async_set_unique_id(serial or host_id, raise_on_progress=False)
+        self._abort_if_host_held(host_id)
+        data, options = split_entry_payload(
+            _entry_payload(settings, reconfigure_required=False)
         )
+        return self.async_create_entry(title=info["title"], data=data, options=options)
 
     async def _async_finish_reconfigure(self, settings, info, previous_host):
         del info
@@ -854,8 +867,19 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
         # address cannot be.
         if discovery_info.ip_address.version != 4:
             return self.async_abort(reason="not_ipv4_address")
-        await self.async_set_unique_id(entry_unique_id({CONF_HOST: host}))
-        self._abort_if_host_held()
+        # An entry whose inverter device is gone still has its serial number.
+        if (
+            serial is not None
+            and self.hass.config_entries.async_entry_for_domain_unique_id(
+                DOMAIN, serial
+            )
+        ):
+            return self.async_abort(reason="already_configured")
+        # The card keeps the host as its unique id, as an ignored card always
+        # did: the entry made from it takes the serial number at its finish.
+        host_id = entry_unique_id({CONF_HOST: host})
+        await self.async_set_unique_id(host_id)
+        self._abort_if_host_held(host_id)
         self._discovered_host = host
         self.context["title_placeholders"] = {
             "name": discovered_model(discovery_info.name)
@@ -1040,11 +1064,14 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
     async def _async_finish_options(self, settings, info, previous_host):
         del info
         unique_id = _claim_host(self.hass, self.config_entry, settings)
-        options = _entry_payload(settings, reconfigure_required=False)
+        data, options = entry_storage(
+            self.config_entry, _entry_payload(settings, reconfigure_required=False)
+        )
         # Read before the update: its listener starts the reload right away.
         loaded = self.config_entry.state is config_entries.ConfigEntryState.LOADED
-        # The options land before the tokens are sorted out: the old host or
+        # The settings land before the tokens are sorted out: the old host or
         # role must already be released when the unused ones are looked up.
+        # Configure changes the connection too; that part belongs in the data.
         changed = self.hass.config_entries.async_update_entry(
             self.config_entry,
             unique_id=unique_id,
@@ -1053,6 +1080,7 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
                 {**self.config_entry.data, **self.config_entry.options},
                 settings,
             ),
+            data=data,
             options=options,
         )
         await async_forget_unused_tokens(self.hass, previous_host)

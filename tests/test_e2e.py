@@ -338,7 +338,7 @@ async def test_minor_version_9_entries_migrate_to_the_current_shape(hass, mock_m
     # for an entry with no stored token, masking what the migration itself did.
     assert await migrations.async_migrate_entry(hass, entry)
 
-    assert entry.minor_version == 14
+    assert entry.minor_version == 15
     # Minor 9 entries are already on the web-API shape: only the version bump
     # and the new role are expected, not the pre-web-API data migration.
     assert CONF_RECONFIGURE_REQUIRED not in entry.data
@@ -761,10 +761,12 @@ async def test_minor_version_11_entries_turn_the_checkbox_into_a_choice(
 
     assert await migrations.async_migrate_entry(hass, entry)
 
-    assert entry.minor_version == 14
+    assert entry.minor_version == 15
+    assert entry.data["modbus_restriction"] == choice
     for values in (entry.data, entry.options):
-        assert values["modbus_restriction"] == choice
         assert "restrict_modbus_to_this_ip" not in values
+    # Since minor 15 the options hold the intervals alone.
+    assert "modbus_restriction" not in entry.options
 
 
 async def test_minor_version_10_entries_take_the_role_of_their_stored_token(
@@ -776,9 +778,9 @@ async def test_minor_version_10_entries_take_the_role_of_their_stored_token(
         HOST, realm="r", token="t", user="technician"
     )
     assert await migrations.async_migrate_entry(hass, entry)
-    assert entry.minor_version == 14
+    assert entry.minor_version == 15
     assert entry.data["api_username"] == "technician"
-    assert entry.options["api_username"] == "technician"
+    assert "api_username" not in entry.options
 
 
 async def test_a_minor_version_10_entry_keeps_the_role_its_owner_chose(
@@ -795,7 +797,7 @@ async def test_a_minor_version_10_entry_keeps_the_role_its_owner_chose(
     assert await migrations.async_migrate_entry(hass, entry)
 
     assert entry.data["api_username"] == "customer"
-    assert entry.options["api_username"] == "customer"
+    assert "api_username" not in entry.options
     assert await store.async_load_token(HOST, "customer")
 
 
@@ -821,7 +823,7 @@ async def test_minor_version_10_entries_without_a_technician_token_stay_customer
 ):
     entry = make_entry(hass, minor_version=10)
     assert await migrations.async_migrate_entry(hass, entry)
-    assert entry.minor_version == 14
+    assert entry.minor_version == 15
     assert entry.data["api_username"] == "customer"
 
 
@@ -2488,3 +2490,74 @@ async def test_a_new_setup_of_the_host_of_a_0_1_9_entry_aborts(hass, mock_modbus
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+# -- the serial number as unique id (1.5) ----------------------------------------
+
+
+async def test_setup_gives_an_entry_its_inverter_s_serial_number_as_unique_id(
+    hass, mock_modbus
+):
+    entry = make_entry(hass)
+    assert entry.unique_id == HOST
+
+    await setup_entry(hass, entry)
+
+    serial = entry.runtime_data.device.identity.serial
+    assert serial
+    assert entry.unique_id == serial
+
+
+async def test_the_serial_number_another_entry_has_is_not_taken(
+    hass, mock_modbus, caplog
+):
+    """Two entries for one inverter are the owner's to sort out."""
+    entry = make_entry(hass)
+    await setup_entry(hass, entry)
+    serial = entry.unique_id
+    twin = MockConfigEntry(
+        domain=DOMAIN,
+        data={**ENTRY_DATA, "host": "inverter.example"},
+        unique_id="inverter.example",
+        version=1,
+        minor_version=15,
+    )
+    twin.add_to_hass(hass)
+
+    await setup_entry(hass, twin)
+
+    assert entry.unique_id == serial
+    assert twin.unique_id == "inverter.example"
+    assert "serve the same inverter" in caplog.text
+
+
+async def test_an_entry_of_minor_14_keeps_every_interval_in_its_options(hass):
+    """1.4.1's Configure wrote everything into the options; the split keeps each value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**ENTRY_DATA, "scan_interval": 10, "web_scan_interval": 60},
+        options={
+            **ENTRY_DATA,
+            "host": "inverter.example",
+            "scan_interval": 15,
+            "web_scan_interval": 60,
+            "meter_power_interval": 2,
+            "api_username": "technician",
+        },
+        unique_id=HOST,
+        version=1,
+        minor_version=14,
+    )
+    entry.add_to_hass(hass)
+
+    assert await migrations.async_migrate_entry(hass, entry)
+
+    assert entry.minor_version == 15
+    assert entry.options == {
+        "scan_interval": 15,
+        "web_scan_interval": 60,
+        "meter_power_interval": 2,
+    }
+    assert entry.data["host"] == "inverter.example"
+    assert entry.data["api_username"] == "technician"
+    assert "scan_interval" not in entry.data

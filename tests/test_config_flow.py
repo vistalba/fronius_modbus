@@ -17,6 +17,7 @@ from custom_components.fronius_modbus.const import (
     entry_title,
     instance_key,
 )
+from custom_components.fronius_modbus.discovery import async_serial_at
 from custom_components.fronius_modbus.fronius_modbus_api.device import DeviceIdentity
 from custom_components.fronius_modbus.froniuswebclient import (
     FroniusWebResponseError,
@@ -107,7 +108,7 @@ async def test_the_config_flow_creates_an_entry(hass, mock_modbus):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Fronius 192.0.2.10"
     assert result["data"]["host"] == HOST
-    assert result["minor_version"] == 14
+    assert result["minor_version"] == 15
     # Leaving the choice alone must not lift a restriction the inverter has.
     assert result["data"]["modbus_restriction"] == "keep"
 
@@ -115,7 +116,7 @@ async def test_the_config_flow_creates_an_entry(hass, mock_modbus):
 async def test_a_new_entry_polls_the_meter_power_with_the_rest(hass, mock_modbus):
     result = await run_flow(hass)
 
-    assert result["data"]["meter_power_interval"] == 0
+    assert result["options"]["meter_power_interval"] == 0
 
 
 async def test_the_setup_form_asks_for_no_update_interval(hass, mock_modbus):
@@ -131,8 +132,11 @@ async def test_the_setup_form_asks_for_no_update_interval(hass, mock_modbus):
 async def test_a_new_entry_starts_with_the_default_intervals(hass, mock_modbus):
     result = await run_flow(hass)
 
-    assert result["data"]["scan_interval"] == 10
-    assert result["data"]["web_scan_interval"] == 60
+    assert result["options"]["scan_interval"] == 10
+    assert result["options"]["web_scan_interval"] == 60
+    # The intervals are options; the connection is data.
+    assert "scan_interval" not in result["data"]
+    assert "host" not in result["options"]
 
 
 async def test_configure_keeps_a_fast_meter_power_interval(hass, monkeypatch):
@@ -1065,7 +1069,10 @@ async def test_a_discovered_inverter_is_set_up_from_its_card(hass, mock_modbus):
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["result"].source == "zeroconf"
-    assert result["result"].unique_id == HOST
+    # The serial number, read over Modbus: it stays when the address changes.
+    assert result["result"].unique_id == await async_serial_at(
+        hass, HOST, 502, INVERTER_UNIT_ID
+    )
 
 
 async def test_an_address_taken_while_the_token_moves_is_not_shared(hass, monkeypatch):
@@ -2386,3 +2393,112 @@ def test_an_unreadable_update_interval_shows_the_default(hass):
     )
 
     assert config_flow.entry_defaults(entry)["scan_interval"] == DEFAULT_SCAN_INTERVAL
+
+
+# -- the serial number as unique id (1.5) ----------------------------------------
+
+
+def _entry_with_serial(hass, host: str = HOST) -> MockConfigEntry:
+    """An entry set up with 1.5 or later: its unique id is the serial number."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": host, "api_username": "customer"},
+        options={"scan_interval": 10},
+        unique_id=SERIAL,
+        version=1,
+        minor_version=15,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_a_host_an_entry_with_a_serial_unique_id_has_is_not_set_up_again(
+    hass, mock_modbus
+):
+    """The host check looked up the host as a unique id, which it no longer is."""
+    _entry_with_serial(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+
+
+async def test_a_moved_inverter_keeps_its_serial_number_as_unique_id(hass):
+    entry = _entry_with_serial(hass)
+    with_inverter_device(hass, entry)
+
+    await discover(hass, discovered(host=MOVED_HOST))
+
+    assert config_flow.entry_defaults(entry)["host"] == MOVED_HOST
+    assert entry.unique_id == SERIAL
+
+
+async def test_a_reconfigured_host_keeps_the_serial_number_as_unique_id(
+    hass, monkeypatch
+):
+    entry = _entry_with_serial(hass)
+    monkeypatch.setattr(
+        hass.config_entries, "async_reload", AsyncMock(return_value=True)
+    )
+
+    await config_flow.async_update_entry_from_input(
+        hass, entry, config_flow.entry_defaults(entry) | {"host": MOVED_HOST}
+    )
+
+    assert entry.data["host"] == MOVED_HOST
+    assert entry.unique_id == SERIAL
+
+
+async def test_a_reconfigured_host_moves_a_host_unique_id_with_it(hass, monkeypatch):
+    """An entry from before 1.5 keeps guarding its host until setup reads the serial."""
+    entry = make_entry(hass)
+    monkeypatch.setattr(
+        hass.config_entries, "async_reload", AsyncMock(return_value=True)
+    )
+
+    await config_flow.async_update_entry_from_input(
+        hass, entry, config_flow.entry_defaults(entry) | {"host": MOVED_HOST}
+    )
+
+    assert entry.unique_id == MOVED_HOST
+
+
+async def test_an_announced_serial_an_entry_has_is_not_offered(hass):
+    """An entry whose inverter device is gone is still that inverter."""
+    _entry_with_serial(hass, host=MOVED_HOST)
+
+    result = await discover(hass, discovered(host="192.0.2.30"))
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+
+
+async def test_configure_keeps_the_connection_in_the_data_and_the_intervals_in_the_options(
+    hass, monkeypatch
+):
+    """Configure wrote every setting into the options, where they shadowed the data."""
+    entry = make_entry(hass)
+    monkeypatch.setattr(
+        config_flow, "_validate_input", AsyncMock(return_value={"title": "Fronius"})
+    )
+    monkeypatch.setattr(
+        hass.config_entries, "async_reload", AsyncMock(return_value=True)
+    )
+
+    await _configure(hass, entry, scan_interval=20)
+
+    assert set(entry.options) == {
+        "scan_interval",
+        "web_scan_interval",
+        "meter_power_interval",
+    }
+    assert entry.options["scan_interval"] == 20
+    assert entry.data["host"] == HOST
+    assert entry.data["api_username"] == "customer"
+    assert "scan_interval" not in entry.data

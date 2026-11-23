@@ -124,6 +124,14 @@ All paths below are under `custom_components/fronius_modbus/`.
 - Config entry `VERSION` stays 1. `MINOR_VERSION` lives in both
   `config_flow.py` and `migrations.py`; bump it only together with a migration
   step. An additive option with a default needs no bump.
+- Since minor 15 the entry's options hold the update intervals alone
+  (`OPTION_KEYS`) and the data everything else; write through
+  `flow_entry.entry_storage`. An entry is still read options first, then data,
+  so 1.4.1 reads the same values after a downgrade
+  (`tests/test_upgrade_contract.py`).
+- The entry's unique id is the inverter's serial number, adopted at setup;
+  older entries carry the host until then. Duplicate checks go by the host
+  (`flow_entry.entry_with_host`), never by reading the host out of the id.
 - Never reuse a retired enum state key for a new meaning: it relabels history
   and breaks automations.
 

@@ -27,7 +27,7 @@ from .const import (
     entry_unique_id,
     instance_key,
 )
-from .flow_entry import host_holder
+from .flow_entry import host_holder, unique_id_after_move
 from .fronius_modbus_api.device import FroniusInverter
 from .fronius_modbus_api.exceptions import error_text
 from .token_store import async_get_token_store, canonical_host
@@ -130,7 +130,7 @@ async def async_follow_host(
     """Move an entry set up by IPv4 address to the address its inverter announces now.
 
     An entry set up by name keeps it: the name resolves the new address. The
-    unique id is the host, so it moves too, and the stored token with it.
+    unique id moves too where it is the host, and the stored token with it.
     """
     endpoint = _endpoint(entry)
     old_host = endpoint[0]
@@ -150,8 +150,7 @@ async def async_follow_host(
     if _endpoint(entry) != endpoint:
         return
     values = {**entry.data, **entry.options}
-    unique_id = entry_unique_id({CONF_HOST: host})
-    holder = host_holder(hass, unique_id)
+    holder = host_holder(hass, entry_unique_id({CONF_HOST: host}))
     if holder is not None and holder.entry_id != entry.entry_id:
         _LOGGER.warning(
             "The inverter of %s announces an address another entry serves; "
@@ -159,6 +158,7 @@ async def async_follow_host(
             entry.entry_id,
         )
         return
+    unique_id = unique_id_after_move(entry, {CONF_HOST: host})
     token_store.move_tokens(old_host, host)
     data = {**entry.data, CONF_HOST: host}
     options = dict(entry.options)

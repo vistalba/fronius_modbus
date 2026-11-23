@@ -5,7 +5,7 @@ from enum import StrEnum
 import re
 from typing import Any
 
-from homeassistant.const import CONF_HOST, CONF_NAME
+from homeassistant.const import CONF_HOST, CONF_NAME, CONF_SCAN_INTERVAL
 
 DOMAIN = "fronius_modbus"
 DEFAULT_NAME = "Fronius"
@@ -38,6 +38,9 @@ CONF_AUTO_ENABLE_MODBUS = "auto_enable_modbus"
 CONF_MODBUS_RESTRICTION = "modbus_restriction"
 CONF_WEB_SCAN_INTERVAL = "web_scan_interval"
 CONF_METER_POWER_INTERVAL = "meter_power_interval"
+# What Configure changes and an entry keeps in its options since minor
+# version 15. Everything else describes the connection and lives in the data.
+OPTION_KEYS = (CONF_SCAN_INTERVAL, CONF_WEB_SCAN_INTERVAL, CONF_METER_POWER_INTERVAL)
 
 
 class ModbusRestriction(StrEnum):
@@ -265,7 +268,11 @@ def entry_title_after(
 
 
 def entry_unique_id(data: Mapping[str, Any]) -> str:
-    """The entry's unique id: its host, spelled one way."""
+    """The host, spelled one way: what duplicate checks compare.
+
+    It was the entry's unique id before 1.5, and stays the unique id of a
+    discovery card; an entry takes its inverter's serial number at setup.
+    """
     return str(data.get(CONF_HOST, "")).strip().lower()
 
 

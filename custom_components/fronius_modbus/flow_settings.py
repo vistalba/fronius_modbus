@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WEB_SCAN_INTERVAL,
+    OPTION_KEYS,
     WEB_API_DISABLED,
     ModbusRestriction,
 )
@@ -87,6 +88,15 @@ def _entry_payload(
     payload.pop("meter_modbus_unit_ids", None)
     payload[CONF_RECONFIGURE_REQUIRED] = reconfigure_required
     return payload
+
+
+def split_entry_payload(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The payload as entry data (the connection) and options (the intervals)."""
+    data = {key: value for key, value in payload.items() if key not in OPTION_KEYS}
+    options = {key: payload[key] for key in OPTION_KEYS if key in payload}
+    return data, options
 
 
 def entry_defaults(entry: config_entries.ConfigEntry) -> dict[str, Any]:
