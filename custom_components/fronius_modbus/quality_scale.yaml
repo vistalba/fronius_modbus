@@ -1,0 +1,110 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no actions; its controls are entities.
+  appropriate-polling:
+    status: done
+    comment: >-
+      Modbus every 10 s and the web interface every 60 s by default, at least
+      5 s; the grid meter power alone can be read every second on request.
+  brands:
+    status: done
+    comment: >-
+      A custom integration: icon and logo ship in brand/, which Home Assistant
+      reads for custom integrations.
+  common-modules: done
+  config-flow:
+    status: done
+    comment: >-
+      Every field has a data_description. The update intervals are not asked at
+      setup; the entry starts with the defaults and Configure changes them.
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: done
+    comment: >-
+      modbus-connection is the open-source library of Home Assistant's own
+      modbus integration, published on PyPI from public CI.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no actions.
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no conditions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no triggers.
+  entity-event-setup: done
+  entity-unique-id:
+    status: done
+    comment: >-
+      fm_<entry>_<key>, built on the config entry id since 0.2. Moving it to
+      the serial number would cut off the history of every installation.
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry:
+    status: todo
+    comment: >-
+      The flow aborts for a host another entry has, but the entry's unique id
+      is still the host instead of the inverter's serial number.
+
+  # Silver
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage:
+    status: done
+    comment: Every module above 95 %, held by .github/scripts/check_module_coverage.py.
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery: done
+  discovery-update-info: done
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: todo
+    comment: >-
+      An MPPT string dark at setup, a sub-system answering for the first time
+      and a meter the web API names later reload the entry on their own.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues: done
+  stale-devices:
+    status: done
+    comment: >-
+      Never removed on doubt: a meter that stops answering keeps its history.
+      The owner deletes a device the inverter no longer reports.
+
+  # Platinum
+  async-dependency:
+    status: todo
+    comment: The web API client is synchronous requests, run in the executor.
+  inject-websession:
+    status: todo
+    comment: The web API client opens its own requests sessions.
+  strict-typing:
+    status: todo
+    comment: Not every module is in the mypy scope yet (tests/test_mypy_scope.py).

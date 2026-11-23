@@ -578,3 +578,29 @@ async def test_a_meter_found_after_setup_is_still_read_right_after_the_inverter(
 
     in_read_order = sorted(report.read_spans, key=lambda name: report.read_spans[name])
     assert in_read_order[:2] == [REPORT_INVERTER, meter_report_name(METER_UNIT_ID)]
+
+
+async def test_a_meter_silent_at_the_identity_check_counts_as_unchanged(
+    device, connection
+):
+    """A meter that fails on its own must not reload the entry or block the check."""
+    await device.async_update()
+    connection.for_unit(METER_UNIT_ID).fail_requests(ServerDeviceBusyError())
+
+    assert await device.async_identities_changed() is False
+
+
+async def test_a_lost_link_at_the_identity_check_is_not_taken_for_a_quiet_meter(
+    device, connection
+):
+    await device.async_update()
+    connection.for_unit(METER_UNIT_ID).fail_requests(ModbusConnectionError())
+
+    with pytest.raises(ModbusConnectionError):
+        await device.async_identities_changed()
+
+
+async def test_an_unchanged_inverter_and_meter_report_no_new_identity(device):
+    await device.async_update()
+
+    assert await device.async_identities_changed() is False

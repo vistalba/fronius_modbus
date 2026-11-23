@@ -85,6 +85,103 @@ With a role, the setup sets the inverter's Modbus itself. Without the web API, s
 
 Every parameter, discovery, the Modbus IP restriction and reconfiguring are in [Installation and Setup](https://github.com/callifo/fronius_modbus/wiki/Installation-and-Setup) in the wiki.
 
+### Setup parameters
+
+| Field | What it does |
+| --- | --- |
+| Host | IP address or host name of the inverter. Modbus TCP (port 502) and the web interface are reached there. |
+| Web API access role | `customer`, `technician` (adds the export limit) or *Without the web API* (Modbus only). |
+| Modbus IP restriction | *Keep* changes nothing on the inverter; the other choices restrict Modbus control to the allowed hosts plus this Home Assistant, or lift the restriction. |
+| Password | Only with a role: the local password of that role. Not stored; Home Assistant keeps a derived token. |
+
+A new entry starts with the default update intervals.
+
+## Options
+
+Settings -> Devices & services -> Fronius Modbus -> **Configure**:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| Update interval | 10 s | How often inverter, battery and meters are read over Modbus. At least 5 s. |
+| Web API update interval | 60 s | How often the values of the web interface are read (temperatures, battery health, event log, energy management outputs). At least 5 s. |
+| Grid meter power update interval | 0 | Reads the grid meter's power alone, down to every second, for a battery control that follows feed-in and draw. 0 reads it with the update interval; it has to be shorter than the update interval. |
+| Host, role, password, Modbus IP restriction | | As at setup. **Reconfigure** in the entry's menu changes them as well. |
+
+## How the data is updated
+
+The integration polls; the inverter pushes nothing.
+
+- **Modbus:** every update interval, one read per SunSpec model the inverter, the battery and each meter report. The register map is discovered at setup and read again when it shifts, for example after a firmware update.
+- **Grid meter power:** with a grid meter power interval set, the grid meter's power is read on its own at that interval in between.
+- **Web interface:** every web API update interval, the component readings, the battery settings and the event log. Without a login only the public endpoints are read.
+- **Writes** from an entity go out at once and are confirmed by the next poll; a Modbus write asks for that poll right away.
+- **Unavailable:** when the inverter does not answer, its entities become unavailable and the log says so once, and once again when it answers. A meter or the battery that stops answering only takes its own entities down.
+
+## Use cases
+
+- See production, house load, grid exchange and the battery in the Energy dashboard: the energy sensors of the inverter, the meter and the battery have the matching state classes.
+- Charge the battery from the grid in cheap hours, or hold it for the evening (*Storage Control Mode*, *Grid charge power*, *Discharge limit*).
+- Follow feed-in with a battery control (for example evcc or your own automation) using the fast grid meter power.
+- Limit the export to the grid (*Export soft limit*, technician role) or the AC power (*AC limit rate*).
+- Get notified about inverter events from the event log (event entities).
+
+## Automation examples
+
+Replace the entity IDs with yours (Settings -> Entities, filter on *Fronius Modbus*).
+
+Charge the battery from the grid at night and hand control back in the morning:
+
+```yaml
+automation:
+  - alias: "Battery: charge from grid at night"
+    triggers:
+      - trigger: time
+        at: "02:00:00"
+    actions:
+      - action: number.set_value
+        target:
+          entity_id: number.fronius_symo_gen24_10_0_grid_charge_power
+        data:
+          value: 3000
+      - action: select.select_option
+        target:
+          entity_id: select.fronius_symo_gen24_10_0_storage_control_mode
+        data:
+          option: charge_from_grid
+  - alias: "Battery: back to auto in the morning"
+    triggers:
+      - trigger: time
+        at: "06:00:00"
+    actions:
+      - action: select.select_option
+        target:
+          entity_id: select.fronius_symo_gen24_10_0_storage_control_mode
+        data:
+          option: auto
+```
+
+Tell me when the inverter reports an event:
+
+```yaml
+automation:
+  - alias: "Inverter event"
+    triggers:
+      - trigger: state
+        entity_id: event.fronius_symo_gen24_10_0_inverter_event
+    actions:
+      - action: notify.notify
+        data:
+          message: "Fronius: {{ trigger.to_state.attributes.event_type }}"
+```
+
+## Known limitations
+
+- Values written over Modbus stay on the inverter with no timeout, also after Home Assistant stops or the entry is removed. Set the controls back before you remove the integration (see [Removal](#removal)).
+- A battery write through the web API stalls the inverter's Modbus for a few seconds; the integration keeps the last values through it.
+- Only one controller should drive the storage mode at a time. What a second one (such as evcc) writes is shown, but the integration does not coordinate with it: the last write wins.
+- Older inverters with a Datamanager (SnapINverter) are untested and only work *Without the web API*, with the SunSpec model type `int + SF` (see [Supported devices](#supported-devices)).
+- The inverter announces itself over mDNS by IPv4 only; an entry set up by IPv6 address is not followed when the address changes.
+
 ## Troubleshooting
 
 - **Diagnostics:** Settings -> Devices & services -> Fronius Modbus -> device -> Download diagnostics. Serial numbers and the Modbus restriction IP are redacted.

@@ -2483,7 +2483,7 @@ async def test_a_new_setup_of_the_host_of_a_0_1_9_entry_aborts(hass, mock_modbus
         DOMAIN, context={"source": "user"}
     )
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"host": HOST, "scan_interval": 10}
+        result["flow_id"], {"host": HOST}
     )
 
     assert result["type"] is FlowResultType.ABORT

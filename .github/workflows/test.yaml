@@ -200,7 +200,11 @@ jobs:
       # -m "" cancels the `-m "not e2e"` default from pyproject.toml, so the
       # slow end-to-end tests against a real Home Assistant run here.
       - name: Run test suite
-        run: pytest tests/ -q -m "" --cov=custom_components/fronius_modbus --cov-report=term:skip-covered --cov-fail-under=90
+        run: pytest tests/ -q -m "" --cov=custom_components/fronius_modbus --cov-report=term:skip-covered --cov-report=json:coverage.json --cov-fail-under=90
+      # The total floor cannot see one module left behind; the quality scale
+      # asks for more than 95 % in every one.
+      - name: Every module covered above 95 %
+        run: python .github/scripts/check_module_coverage.py coverage.json
       # A green suite says the tests pass, not that they would catch anything.
       # Only on one job: the answer does not depend on the Home Assistant
       # version, and the mutations edit files in the workspace.

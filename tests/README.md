@@ -12,7 +12,7 @@ usually somebody with no memory of why any of it is here.
 
 Ruff, formatting, mypy, pip-audit, gitleaks, the dump tool's PowerShell tests, the check
 that the installed Modbus libraries are the ones core's `modbus` integration
-pins, the test suite with its coverage floor, the same for the minimum Home Assistant when
+pins, the test suite with its coverage floor and more than 95 % in every module, the same for the minimum Home Assistant when
 `MIN_HA_PYTHON` is set, and the mutation run, in that order,
 stopping at the first failure. The Test workflow runs the same set; a guard in
 `tests/test_guards.py` fails if the two ever drift apart. The HACS and hassfest
@@ -73,6 +73,7 @@ because the thing it prevents happened, here or in a sibling project.
 | `test_guards.py` | No guard binds itself to one source file; every guard is listed; `check.sh` matches CI |
 | `test_imports.py` | Every module imports outside the author's own tree - the `from config.custom_components...` line that shipped on main cannot ship again |
 | `test_entity_table.py` | Every legacy unique-id key is still registered and translated (`legacy_unique_ids.json`) |
+| `test_quality_scale.py` | `quality_scale.yaml` lists every rule hassfest knows, each with a valid status, a reason for every exemption and a note on every rule still to do; a rule marked done that hassfest would check in core is checked against the code here (hassfest skips the file for custom integrations) |
 | `test_upgrade_contract.py` | An entry of 1.4.1 comes through the upgrade with every entity, device, disabled flag and state it had (`fixtures/upgrade_contract_1_4_1.json`, recorded once by 1.4.1), and 1.4.1 still reads the same settings from the entry afterwards. A failure is a broken installation: fix the code, never re-record the file. New rows are allowed |
 | `test_api_is_ha_free.py` | The device library under `fronius_modbus_api/` imports no Home Assistant |
 | `test_deprecated_constants.py` | No Home Assistant constant with an announced removal is used; Home Assistant logs such a use at import, where the check in `conftest.py` cannot see it, so the package is imported in a subprocess and what Home Assistant logs is read |

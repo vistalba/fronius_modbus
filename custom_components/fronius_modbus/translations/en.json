@@ -5,15 +5,18 @@
     "step": {
       "user": {
         "title": "Set up Fronius System",
-        "description": "Enter the host, choose the local Web API access role, and set the update intervals and Modbus IP restriction. Minimum Modbus and Web API interval: 5 seconds. The technician role additionally enables the export limit control. Without the web API, the SoC mode, SoC minimum and maximum, backup reserve, self-consumption optimisation, target feed-in, charging from AC and from the grid, Solar API, export limit, the Modbus status of the web interface and Modbus reset are not available, and Modbus TCP has to be switched on in the inverter beforehand, with the SunSpec model type int + SF. Switching an existing entry to it removes those entities; their history stays.",
+        "description": "Enter the host, choose the local Web API access role and the Modbus IP restriction. The entry starts with the default update intervals; change them afterwards under Configure. The technician role additionally enables the export limit control. Without the web API, the SoC mode, SoC minimum and maximum, backup reserve, self-consumption optimisation, target feed-in, charging from AC and from the grid, Solar API, export limit, the Modbus status of the web interface and Modbus reset are not available, and Modbus TCP has to be switched on in the inverter beforehand, with the SunSpec model type int + SF. Switching an existing entry to it removes those entities; their history stays.",
         "data": {
           "host": "Host",
-          "scan_interval": "Update interval (seconds)",
-          "web_scan_interval": "Web API update interval (seconds)",
-          "meter_power_interval": "Grid meter power update interval (seconds, 0 = with the update interval)",
           "modbus_restriction": "Modbus IP restriction",
           "api_username": "Web API access role",
           "change_allowed_host": "Change the allowed address (with the restriction to this Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP address or host name of the inverter in your network. The Modbus TCP port 502 and the web interface are reached at this address.",
+          "modbus_restriction": "What the setup does with the inverter's Modbus IP restriction: keep it, restrict control to the allowed hosts and add this Home Assistant, or lift it. Keeping changes nothing on the inverter.",
+          "api_username": "The local login of the inverter's web interface (not Solar.web). Technician additionally offers the export limit. Without the web API the integration runs on Modbus alone.",
+          "change_allowed_host": "Ask for the address the Modbus restriction allows, for example when Home Assistant runs behind NAT. Only used with the restriction to this Home Assistant."
         }
       },
       "user_password": {
@@ -21,6 +24,9 @@
         "description": "Enter the password of the selected Web API role for {entry_title} ({host}) to create or refresh the stored token. The password is not stored in the config entry.",
         "data": {
           "api_password": "Password"
+        },
+        "data_description": {
+          "api_password": "Password of the selected role in the inverter's web interface. It is not stored; Home Assistant keeps a derived token."
         }
       },
       "user_sunspec": {
@@ -38,6 +44,15 @@
           "modbus_restriction": "Modbus IP restriction",
           "api_username": "Web API access role",
           "change_allowed_host": "Change the allowed address (with the restriction to this Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP address or host name of the inverter in your network. The Modbus TCP port 502 and the web interface are reached at this address.",
+          "scan_interval": "How often the inverter, battery and meters are read over Modbus. At least 5 seconds.",
+          "web_scan_interval": "How often the values of the inverter's web interface are read, such as temperatures, battery health and the event log. At least 5 seconds.",
+          "meter_power_interval": "Reads the grid meter's power alone, as often as every second, for a battery control that follows feed-in and draw. 0 reads it with the update interval.",
+          "modbus_restriction": "What the setup does with the inverter's Modbus IP restriction: keep it, restrict control to the allowed hosts and add this Home Assistant, or lift it. Keeping changes nothing on the inverter.",
+          "api_username": "The local login of the inverter's web interface (not Solar.web). Technician additionally offers the export limit. Without the web API the integration runs on Modbus alone.",
+          "change_allowed_host": "Ask for the address the Modbus restriction allows, for example when Home Assistant runs behind NAT. Only used with the restriction to this Home Assistant."
         }
       },
       "reconfigure_password": {
@@ -45,6 +60,9 @@
         "description": "Enter the password of the selected Web API role for {entry_title} ({host}) to create or refresh the stored token. The password is not stored in the config entry.",
         "data": {
           "api_password": "Password"
+        },
+        "data_description": {
+          "api_password": "Password of the selected role in the inverter's web interface. It is not stored; Home Assistant keeps a derived token."
         }
       },
       "reconfigure_sunspec": {
@@ -56,6 +74,9 @@
         "description": "The stored login of this entry is missing or was rejected, for example after the password was changed on the inverter. Choose the access role; the next step asks for its password. If you do not want to use the web API, choose Without the web API. Without the web API, the SoC mode, SoC minimum and maximum, backup reserve, self-consumption optimisation, target feed-in, charging from AC and from the grid, Solar API, export limit, the Modbus status of the web interface and Modbus reset are not available, and Modbus TCP has to be switched on in the inverter beforehand, with the SunSpec model type int + SF. Switching an existing entry to it removes those entities; their history stays.",
         "data": {
           "api_username": "Web API access role"
+        },
+        "data_description": {
+          "api_username": "The local login of the inverter's web interface (not Solar.web). Technician additionally offers the export limit. Without the web API the integration runs on Modbus alone."
         }
       },
       "reauth_password": {
@@ -63,6 +84,9 @@
         "description": "Enter the password of the selected Web API role for {entry_title} ({host}) to create or refresh the stored token. The password is not stored in the config entry.",
         "data": {
           "api_password": "Password"
+        },
+        "data_description": {
+          "api_password": "Password of the selected role in the inverter's web interface. It is not stored; Home Assistant keeps a derived token."
         }
       },
       "reauth_sunspec": {
@@ -74,6 +98,9 @@
         "description": "The Modbus IP restriction of {entry_title} ({host}) will allow the address below: the one Home Assistant reaches the inverter from. If Home Assistant runs behind NAT, for example in a Docker container on a bridge network or in a virtual machine with NAT, the inverter sees the address of the computer it runs on: enter that one. A wrong address blocks Modbus control from Home Assistant and, if the restriction was off before, from every other device too.",
         "data": {
           "allowed_host": "Address to allow"
+        },
+        "data_description": {
+          "allowed_host": "The address the inverter sees Home Assistant at. Behind NAT, the address of the computer Home Assistant runs on."
         }
       },
       "reconfigure_allowed_host": {
@@ -81,6 +108,9 @@
         "description": "The Modbus IP restriction of {entry_title} ({host}) will allow the address below: the one Home Assistant reaches the inverter from. If Home Assistant runs behind NAT, for example in a Docker container on a bridge network or in a virtual machine with NAT, the inverter sees the address of the computer it runs on: enter that one. A wrong address blocks Modbus control from Home Assistant and, if the restriction was off before, from every other device too.",
         "data": {
           "allowed_host": "Address to allow"
+        },
+        "data_description": {
+          "allowed_host": "The address the inverter sees Home Assistant at. Behind NAT, the address of the computer Home Assistant runs on."
         }
       },
       "reauth_allowed_host": {
@@ -88,6 +118,9 @@
         "description": "The Modbus IP restriction of {entry_title} ({host}) will allow the address below: the one Home Assistant reaches the inverter from. If Home Assistant runs behind NAT, for example in a Docker container on a bridge network or in a virtual machine with NAT, the inverter sees the address of the computer it runs on: enter that one. A wrong address blocks Modbus control from Home Assistant and, if the restriction was off before, from every other device too.",
         "data": {
           "allowed_host": "Address to allow"
+        },
+        "data_description": {
+          "allowed_host": "The address the inverter sees Home Assistant at. Behind NAT, the address of the computer Home Assistant runs on."
         }
       }
     },
@@ -940,6 +973,15 @@
           "modbus_restriction": "Modbus IP restriction",
           "api_username": "Web API access role",
           "change_allowed_host": "Change the allowed address (with the restriction to this Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP address or host name of the inverter in your network. The Modbus TCP port 502 and the web interface are reached at this address.",
+          "scan_interval": "How often the inverter, battery and meters are read over Modbus. At least 5 seconds.",
+          "web_scan_interval": "How often the values of the inverter's web interface are read, such as temperatures, battery health and the event log. At least 5 seconds.",
+          "meter_power_interval": "Reads the grid meter's power alone, as often as every second, for a battery control that follows feed-in and draw. 0 reads it with the update interval.",
+          "modbus_restriction": "What the setup does with the inverter's Modbus IP restriction: keep it, restrict control to the allowed hosts and add this Home Assistant, or lift it. Keeping changes nothing on the inverter.",
+          "api_username": "The local login of the inverter's web interface (not Solar.web). Technician additionally offers the export limit. Without the web API the integration runs on Modbus alone.",
+          "change_allowed_host": "Ask for the address the Modbus restriction allows, for example when Home Assistant runs behind NAT. Only used with the restriction to this Home Assistant."
         }
       },
       "password": {
@@ -947,6 +989,9 @@
         "description": "Enter the password of the selected Web API role for {entry_title} ({host}) to create or refresh the stored token, or leave it empty to keep the stored one. Passwords are not stored in the config entry.",
         "data": {
           "api_password": "Password"
+        },
+        "data_description": {
+          "api_password": "Password of the selected role in the inverter's web interface. It is not stored; Home Assistant keeps a derived token."
         }
       },
       "sunspec": {
@@ -958,6 +1003,9 @@
         "description": "The Modbus IP restriction of {entry_title} ({host}) will allow the address below: the one Home Assistant reaches the inverter from. If Home Assistant runs behind NAT, for example in a Docker container on a bridge network or in a virtual machine with NAT, the inverter sees the address of the computer it runs on: enter that one. A wrong address blocks Modbus control from Home Assistant and, if the restriction was off before, from every other device too.",
         "data": {
           "allowed_host": "Address to allow"
+        },
+        "data_description": {
+          "allowed_host": "The address the inverter sees Home Assistant at. Behind NAT, the address of the computer Home Assistant runs on."
         }
       }
     },

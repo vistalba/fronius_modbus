@@ -1,8 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Every field of the setup, Reconfigure and Configure dialogs explains itself below the input.
+- The README describes every setup field and option, how and how often the values are updated, use cases, automation examples and the known limitations.
+
+### Changed
+- A new setup no longer asks for the update intervals: the entry starts with the defaults (Modbus 10 s, web API 60 s, grid meter power with the Modbus poll), and *Configure* changes them as before. Existing entries keep their intervals.
+
 ## 1.4.2
 
 Released 2026-11-25. It brings back the entities of an old entry after a failed delete, shows the address the Modbus IP restriction allows, and fixes errors in reading and writing. Coming from redpomodoro/fronius_modbus, read the README's *Coming from redpomodoro/fronius_modbus* first.
+
+### Added
 
 ### Changed
 - `tools/inverter_dump.bat` also reads Modbus unit 240 on a Datamanager (SnapINverter), where its meter usually answers (issue 110).

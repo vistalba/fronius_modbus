@@ -62,8 +62,20 @@ CONF_CHANGE_ALLOWED_HOST = "change_allowed_host"
 
 def settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Host, intervals, role and Modbus restriction, filled in with ``defaults``."""
-    fields: dict[vol.Marker, Any] = {
-        vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, "")): str,
+    return _settings_schema(defaults, intervals=True)
+
+
+def setup_schema(defaults: dict[str, Any]) -> vol.Schema:
+    """The settings of a new entry, without the update intervals.
+
+    A new entry starts with the default intervals; Configure changes them. The
+    quality scale keeps polling intervals out of the setup dialog.
+    """
+    return _settings_schema(defaults, intervals=False)
+
+
+def _interval_fields(defaults: dict[str, Any]) -> dict[vol.Marker, Any]:
+    return {
         vol.Required(
             CONF_SCAN_INTERVAL,
             default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
@@ -78,6 +90,13 @@ def settings_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_METER_POWER_INTERVAL, DEFAULT_METER_POWER_INTERVAL
             ),
         ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAXIMUM_METER_POWER_INTERVAL)),
+    }
+
+
+def _settings_schema(defaults: dict[str, Any], *, intervals: bool) -> vol.Schema:
+    fields: dict[vol.Marker, Any] = {
+        vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, "")): str,
+        **(_interval_fields(defaults) if intervals else {}),
         **_role_field(defaults),
         vol.Required(
             CONF_MODBUS_RESTRICTION,

@@ -38,6 +38,7 @@ GUARD_FILES = {
     "test_durations.py": "no test quietly starts taking minutes",
     "test_imports.py": "every module imports outside the author's own tree",
     "test_entity_table.py": "every legacy key is still registered and translated",
+    "test_quality_scale.py": "the quality scale file lists every rule and claims nothing the code lacks",
     "test_upgrade_contract.py": "an entry of 1.4.1 keeps every entity, device and setting",
     "test_api_is_ha_free.py": "the device library imports no Home Assistant",
     "test_deprecated_constants.py": "no Home Assistant constant with an announced removal is used",
@@ -246,6 +247,10 @@ TOOL_INVOCATIONS = {
         "check_min_ha.py",
     ),
     "mutate.py": ("mutate.py .github/mutations", "mutate.py .github/mutations"),
+    "check_module_coverage.py": (
+        "run: python .github/scripts/check_module_coverage.py",
+        "check_module_coverage.py",
+    ),
     "inverter_dump.tests.ps1": (
         "run: pwsh -NoProfile -File tools/inverter_dump.tests.ps1",
         "pwsh -NoProfile -File tools/inverter_dump.tests.ps1",

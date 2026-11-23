@@ -109,3 +109,34 @@ def test_the_reader_finds_the_messages_it_is_pointed_at():
     assert "cannot_connect" in messages, "an errors[...] assignment"
     assert "invalid_host" in messages, "a message the flow builds itself"
     assert "already_in_progress" in messages, "a reason a helper raises"
+
+
+@pytest.mark.parametrize("translation_file", TRANSLATION_FILES)
+def test_every_form_field_explains_itself(translation_file):
+    """A field label alone left the owner guessing what an interval or a role does.
+
+    The quality scale's config-flow rule asks for a `data_description` beside
+    every field, so the dialog shows the explanation under the input.
+    """
+    translations = json.loads(
+        (FLOW.parent / translation_file).read_text(encoding="utf-8")
+    )
+    unexplained = {
+        f"{section}.{step_id}": sorted(
+            set(step["data"]) - set(step.get("data_description", {}))
+        )
+        for section in ("config", "options")
+        for step_id, step in translations[section]["step"].items()
+        if set(step.get("data", {})) - set(step.get("data_description", {}))
+    }
+    orphaned = {
+        f"{section}.{step_id}": sorted(
+            set(step.get("data_description", {})) - set(step.get("data", {}))
+        )
+        for section in ("config", "options")
+        for step_id, step in translations[section]["step"].items()
+        if set(step.get("data_description", {})) - set(step.get("data", {}))
+    }
+
+    assert not unexplained, f"fields without a description: {unexplained}"
+    assert not orphaned, f"descriptions of no field: {orphaned}"

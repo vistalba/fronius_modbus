@@ -5,15 +5,18 @@
     "step": {
       "user": {
         "title": "Fronius-System einrichten",
-        "description": "Gib den Host ein, wähle die lokale Web-API-Zugriffsrolle und setze die Aktualisierungsintervalle sowie die Modbus-IP-Beschränkung. Mindestintervall für Modbus und Web-API: 5 Sekunden. Die Technikerrolle schaltet zusätzlich die Einspeisebegrenzung frei. Ohne Web-API fehlen SoC-Modus, SoC-Minimum und -Maximum, Notstrom-Reserve, Eigenverbrauchs-Optimierung, Ziel-Einspeisung, Laden aus AC und aus dem Netz, Solar API, Einspeisebegrenzung, der Modbus-Status der Weboberfläche und Modbus-Reset, und Modbus TCP muss vorher im Wechselrichter eingeschaltet sein, mit dem SunSpec-Modelltyp int + SF. Beim Umstellen eines bestehenden Eintrags werden diese Entitäten entfernt; ihre Historie bleibt.",
+        "description": "Gib den Host ein, wähle die lokale Web-API-Zugriffsrolle und die Modbus-IP-Beschränkung. Der Eintrag startet mit den Standard-Aktualisierungsintervallen; ändere sie danach unter Konfigurieren. Die Technikerrolle schaltet zusätzlich die Einspeisebegrenzung frei. Ohne Web-API fehlen SoC-Modus, SoC-Minimum und -Maximum, Notstrom-Reserve, Eigenverbrauchs-Optimierung, Ziel-Einspeisung, Laden aus AC und aus dem Netz, Solar API, Einspeisebegrenzung, der Modbus-Status der Weboberfläche und Modbus-Reset, und Modbus TCP muss vorher im Wechselrichter eingeschaltet sein, mit dem SunSpec-Modelltyp int + SF. Beim Umstellen eines bestehenden Eintrags werden diese Entitäten entfernt; ihre Historie bleibt.",
         "data": {
           "host": "Host",
-          "scan_interval": "Aktualisierungsintervall (Sekunden)",
-          "web_scan_interval": "Web-API-Aktualisierungsintervall (Sekunden)",
-          "meter_power_interval": "Aktualisierungsintervall Netzzähler-Leistung (Sekunden, 0 = mit dem Aktualisierungsintervall)",
           "modbus_restriction": "Modbus-IP-Beschränkung",
           "api_username": "Web-API-Zugriffsrolle",
           "change_allowed_host": "Freigegebene Adresse ändern (bei Beschränkung auf dieses Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname des Wechselrichters im Netzwerk. Unter dieser Adresse werden Modbus TCP (Port 502) und die Weboberfläche erreicht.",
+          "modbus_restriction": "Was die Einrichtung mit der Modbus-IP-Beschränkung des Wechselrichters tut: beibehalten, die Steuerung auf erlaubte Hosts beschränken und dieses Home Assistant erlauben, oder aufheben. Beibehalten ändert am Wechselrichter nichts.",
+          "api_username": "Die lokale Anmeldung der Weboberfläche des Wechselrichters (nicht Solar.web). Techniker bietet zusätzlich die Einspeisebegrenzung. Ohne Web-API läuft die Integration nur über Modbus.",
+          "change_allowed_host": "Fragt nach der Adresse, die die Modbus-Beschränkung erlaubt, zum Beispiel wenn Home Assistant hinter NAT läuft. Nur bei Beschränkung auf dieses Home Assistant."
         }
       },
       "user_password": {
@@ -21,6 +24,9 @@
         "description": "Gib das Passwort der ausgewählten Web-API-Rolle für {entry_title} ({host}) ein, um den gespeicherten Token zu erstellen oder zu erneuern. Das Passwort wird nicht im Konfigurationseintrag gespeichert.",
         "data": {
           "api_password": "Passwort"
+        },
+        "data_description": {
+          "api_password": "Passwort der gewählten Rolle in der Weboberfläche des Wechselrichters. Es wird nicht gespeichert; Home Assistant behält ein daraus abgeleitetes Token."
         }
       },
       "user_sunspec": {
@@ -38,6 +44,15 @@
           "modbus_restriction": "Modbus-IP-Beschränkung",
           "api_username": "Web-API-Zugriffsrolle",
           "change_allowed_host": "Freigegebene Adresse ändern (bei Beschränkung auf dieses Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname des Wechselrichters im Netzwerk. Unter dieser Adresse werden Modbus TCP (Port 502) und die Weboberfläche erreicht.",
+          "scan_interval": "Wie oft Wechselrichter, Batterie und Zähler über Modbus gelesen werden. Mindestens 5 Sekunden.",
+          "web_scan_interval": "Wie oft die Werte der Weboberfläche des Wechselrichters gelesen werden, etwa Temperaturen, Batteriezustand und das Ereignisprotokoll. Mindestens 5 Sekunden.",
+          "meter_power_interval": "Liest die Leistung des Netzzählers allein, bis zu jede Sekunde, für eine Batteriesteuerung, die Einspeisung und Bezug folgt. 0 liest sie mit dem Aktualisierungsintervall.",
+          "modbus_restriction": "Was die Einrichtung mit der Modbus-IP-Beschränkung des Wechselrichters tut: beibehalten, die Steuerung auf erlaubte Hosts beschränken und dieses Home Assistant erlauben, oder aufheben. Beibehalten ändert am Wechselrichter nichts.",
+          "api_username": "Die lokale Anmeldung der Weboberfläche des Wechselrichters (nicht Solar.web). Techniker bietet zusätzlich die Einspeisebegrenzung. Ohne Web-API läuft die Integration nur über Modbus.",
+          "change_allowed_host": "Fragt nach der Adresse, die die Modbus-Beschränkung erlaubt, zum Beispiel wenn Home Assistant hinter NAT läuft. Nur bei Beschränkung auf dieses Home Assistant."
         }
       },
       "reconfigure_password": {
@@ -45,6 +60,9 @@
         "description": "Gib das Passwort der ausgewählten Web-API-Rolle für {entry_title} ({host}) ein, um den gespeicherten Token zu erstellen oder zu erneuern. Das Passwort wird nicht im Konfigurationseintrag gespeichert.",
         "data": {
           "api_password": "Passwort"
+        },
+        "data_description": {
+          "api_password": "Passwort der gewählten Rolle in der Weboberfläche des Wechselrichters. Es wird nicht gespeichert; Home Assistant behält ein daraus abgeleitetes Token."
         }
       },
       "reconfigure_sunspec": {
@@ -56,6 +74,9 @@
         "description": "Die gespeicherte Anmeldung dieses Eintrags fehlt oder wurde abgelehnt, zum Beispiel nach einer Passwortänderung am Wechselrichter. Wähle die Zugriffsrolle; im nächsten Schritt wird ihr Passwort abgefragt. Wer die Web-API nicht nutzen will, wählt Ohne Web-API. Ohne Web-API fehlen SoC-Modus, SoC-Minimum und -Maximum, Notstrom-Reserve, Eigenverbrauchs-Optimierung, Ziel-Einspeisung, Laden aus AC und aus dem Netz, Solar API, Einspeisebegrenzung, der Modbus-Status der Weboberfläche und Modbus-Reset, und Modbus TCP muss vorher im Wechselrichter eingeschaltet sein, mit dem SunSpec-Modelltyp int + SF. Beim Umstellen eines bestehenden Eintrags werden diese Entitäten entfernt; ihre Historie bleibt.",
         "data": {
           "api_username": "Web-API-Zugriffsrolle"
+        },
+        "data_description": {
+          "api_username": "Die lokale Anmeldung der Weboberfläche des Wechselrichters (nicht Solar.web). Techniker bietet zusätzlich die Einspeisebegrenzung. Ohne Web-API läuft die Integration nur über Modbus."
         }
       },
       "reauth_password": {
@@ -63,6 +84,9 @@
         "description": "Gib das Passwort der ausgewählten Web-API-Rolle für {entry_title} ({host}) ein, um den gespeicherten Token zu erstellen oder zu erneuern. Das Passwort wird nicht im Konfigurationseintrag gespeichert.",
         "data": {
           "api_password": "Passwort"
+        },
+        "data_description": {
+          "api_password": "Passwort der gewählten Rolle in der Weboberfläche des Wechselrichters. Es wird nicht gespeichert; Home Assistant behält ein daraus abgeleitetes Token."
         }
       },
       "reauth_sunspec": {
@@ -74,6 +98,9 @@
         "description": "Die Modbus-IP-Beschränkung von {entry_title} ({host}) erlaubt die Adresse unten: die, von der aus Home Assistant den Wechselrichter erreicht. Läuft Home Assistant hinter NAT, zum Beispiel in einem Docker-Container im Bridge-Netz oder in einer virtuellen Maschine mit NAT, sieht der Wechselrichter die Adresse des Rechners, auf dem es läuft: Trage dann diese ein. Eine falsche Adresse sperrt die Modbus-Steuerung durch Home Assistant und, wenn die Beschränkung vorher aus war, auch durch jedes andere Gerät.",
         "data": {
           "allowed_host": "Zu erlaubende Adresse"
+        },
+        "data_description": {
+          "allowed_host": "Die Adresse, unter der der Wechselrichter Home Assistant sieht. Hinter NAT die Adresse des Rechners, auf dem Home Assistant läuft."
         }
       },
       "reconfigure_allowed_host": {
@@ -81,6 +108,9 @@
         "description": "Die Modbus-IP-Beschränkung von {entry_title} ({host}) erlaubt die Adresse unten: die, von der aus Home Assistant den Wechselrichter erreicht. Läuft Home Assistant hinter NAT, zum Beispiel in einem Docker-Container im Bridge-Netz oder in einer virtuellen Maschine mit NAT, sieht der Wechselrichter die Adresse des Rechners, auf dem es läuft: Trage dann diese ein. Eine falsche Adresse sperrt die Modbus-Steuerung durch Home Assistant und, wenn die Beschränkung vorher aus war, auch durch jedes andere Gerät.",
         "data": {
           "allowed_host": "Zu erlaubende Adresse"
+        },
+        "data_description": {
+          "allowed_host": "Die Adresse, unter der der Wechselrichter Home Assistant sieht. Hinter NAT die Adresse des Rechners, auf dem Home Assistant läuft."
         }
       },
       "reauth_allowed_host": {
@@ -88,6 +118,9 @@
         "description": "Die Modbus-IP-Beschränkung von {entry_title} ({host}) erlaubt die Adresse unten: die, von der aus Home Assistant den Wechselrichter erreicht. Läuft Home Assistant hinter NAT, zum Beispiel in einem Docker-Container im Bridge-Netz oder in einer virtuellen Maschine mit NAT, sieht der Wechselrichter die Adresse des Rechners, auf dem es läuft: Trage dann diese ein. Eine falsche Adresse sperrt die Modbus-Steuerung durch Home Assistant und, wenn die Beschränkung vorher aus war, auch durch jedes andere Gerät.",
         "data": {
           "allowed_host": "Zu erlaubende Adresse"
+        },
+        "data_description": {
+          "allowed_host": "Die Adresse, unter der der Wechselrichter Home Assistant sieht. Hinter NAT die Adresse des Rechners, auf dem Home Assistant läuft."
         }
       }
     },
@@ -940,6 +973,15 @@
           "modbus_restriction": "Modbus-IP-Beschränkung",
           "api_username": "Web-API-Zugriffsrolle",
           "change_allowed_host": "Freigegebene Adresse ändern (bei Beschränkung auf dieses Home Assistant)"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname des Wechselrichters im Netzwerk. Unter dieser Adresse werden Modbus TCP (Port 502) und die Weboberfläche erreicht.",
+          "scan_interval": "Wie oft Wechselrichter, Batterie und Zähler über Modbus gelesen werden. Mindestens 5 Sekunden.",
+          "web_scan_interval": "Wie oft die Werte der Weboberfläche des Wechselrichters gelesen werden, etwa Temperaturen, Batteriezustand und das Ereignisprotokoll. Mindestens 5 Sekunden.",
+          "meter_power_interval": "Liest die Leistung des Netzzählers allein, bis zu jede Sekunde, für eine Batteriesteuerung, die Einspeisung und Bezug folgt. 0 liest sie mit dem Aktualisierungsintervall.",
+          "modbus_restriction": "Was die Einrichtung mit der Modbus-IP-Beschränkung des Wechselrichters tut: beibehalten, die Steuerung auf erlaubte Hosts beschränken und dieses Home Assistant erlauben, oder aufheben. Beibehalten ändert am Wechselrichter nichts.",
+          "api_username": "Die lokale Anmeldung der Weboberfläche des Wechselrichters (nicht Solar.web). Techniker bietet zusätzlich die Einspeisebegrenzung. Ohne Web-API läuft die Integration nur über Modbus.",
+          "change_allowed_host": "Fragt nach der Adresse, die die Modbus-Beschränkung erlaubt, zum Beispiel wenn Home Assistant hinter NAT läuft. Nur bei Beschränkung auf dieses Home Assistant."
         }
       },
       "password": {
@@ -947,6 +989,9 @@
         "description": "Gib das Passwort der ausgewählten Web-API-Rolle für {entry_title} ({host}) ein, um den gespeicherten Token zu erstellen oder zu erneuern, oder lass das Feld leer, um den gespeicherten zu behalten. Passwörter werden nicht im Konfigurationseintrag gespeichert.",
         "data": {
           "api_password": "Passwort"
+        },
+        "data_description": {
+          "api_password": "Passwort der gewählten Rolle in der Weboberfläche des Wechselrichters. Es wird nicht gespeichert; Home Assistant behält ein daraus abgeleitetes Token."
         }
       },
       "sunspec": {
@@ -958,6 +1003,9 @@
         "description": "Die Modbus-IP-Beschränkung von {entry_title} ({host}) erlaubt die Adresse unten: die, von der aus Home Assistant den Wechselrichter erreicht. Läuft Home Assistant hinter NAT, zum Beispiel in einem Docker-Container im Bridge-Netz oder in einer virtuellen Maschine mit NAT, sieht der Wechselrichter die Adresse des Rechners, auf dem es läuft: Trage dann diese ein. Eine falsche Adresse sperrt die Modbus-Steuerung durch Home Assistant und, wenn die Beschränkung vorher aus war, auch durch jedes andere Gerät.",
         "data": {
           "allowed_host": "Zu erlaubende Adresse"
+        },
+        "data_description": {
+          "allowed_host": "Die Adresse, unter der der Wechselrichter Home Assistant sieht. Hinter NAT die Adresse des Rechners, auf dem Home Assistant läuft."
         }
       }
     },

@@ -54,6 +54,7 @@ from .flow_forms import (
     password_schema,
     role_schema,
     settings_schema,
+    setup_schema,
 )
 from .flow_settings import (
     _default_payload,
@@ -873,6 +874,7 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             previous_settings=None,
             claim_host=self._async_claim_new_host,
             on_success=self._async_finish_user,
+            build_schema=setup_schema,
         )
 
     async def async_step_user_password(self, user_input=None):

@@ -86,7 +86,11 @@ echo "== pytest =="
 # it to get past a red run.
 # The Modbus libraries an installation runs: the ones core's modbus pins.
 "$PYTHON" .github/scripts/core_modbus_pins.py --check
-"$PYTHON" -m pytest tests/ -q -m "" --cov=custom_components/fronius_modbus --cov-report=term:skip-covered --cov-fail-under=90
+COVERAGE_JSON="${TMPDIR:-/tmp}/fronius_modbus_coverage.json"
+"$PYTHON" -m pytest tests/ -q -m "" --cov=custom_components/fronius_modbus --cov-report=term:skip-covered --cov-report=json:"$COVERAGE_JSON" --cov-fail-under=90
+# The total floor above cannot see one module left behind; the quality scale
+# asks for more than 95 % in every one.
+"$PYTHON" .github/scripts/check_module_coverage.py "$COVERAGE_JSON"
 
 # The second Home Assistant version is optional because its interpreter
 # lives wherever you put it:

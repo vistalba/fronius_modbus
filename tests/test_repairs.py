@@ -253,3 +253,71 @@ async def test_the_entry_id_is_taken_from_the_issue_data_when_it_is_there(hass):
     )
 
     assert flow._entry_id == "from-data"
+
+
+async def test_a_fix_for_an_entry_deleted_while_the_repair_was_open_closes_it(
+    hass, mock_modbus, web_client, repairs_client
+):
+    entry = await make_entry(hass, mock_modbus, with_token=True)
+    issue_id = f"{SOLAR_API_LOW_FIRMWARE_ISSUE_ID_PREFIX}{entry.entry_id}"
+    flow = await start_fix_flow(repairs_client, issue_id)
+    flow = await advance_fix_flow(
+        repairs_client, flow["flow_id"], {"next_step_id": "fix"}
+    )
+    await hass.config_entries.async_remove(entry.entry_id)
+    _recreate_solar_api_issue(hass, issue_id)
+
+    flow = await advance_fix_flow(repairs_client, flow["flow_id"])
+
+    assert flow["type"] == "create_entry"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    assert ("solar", False) not in web_client.calls
+
+
+async def test_ignoring_the_repair_of_an_entry_deleted_meanwhile_closes_it(
+    hass, mock_modbus, web_client, repairs_client
+):
+    entry = await make_entry(hass, mock_modbus, with_token=True)
+    issue_id = f"{SOLAR_API_LOW_FIRMWARE_ISSUE_ID_PREFIX}{entry.entry_id}"
+    flow = await start_fix_flow(repairs_client, issue_id)
+    await hass.config_entries.async_remove(entry.entry_id)
+    _recreate_solar_api_issue(hass, issue_id)
+
+    flow = await advance_fix_flow(
+        repairs_client, flow["flow_id"], {"next_step_id": "ignore"}
+    )
+
+    assert flow["type"] == "create_entry"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_the_fix_of_an_unloaded_entry_shows_the_error_and_keeps_the_issue(
+    hass, mock_modbus, web_client, repairs_client
+):
+    """Without a running web control nothing could switch the Solar API off."""
+    entry = await make_entry(hass, mock_modbus, with_token=True)
+    issue_id = f"{SOLAR_API_LOW_FIRMWARE_ISSUE_ID_PREFIX}{entry.entry_id}"
+    flow = await start_fix_flow(repairs_client, issue_id)
+    flow = await advance_fix_flow(
+        repairs_client, flow["flow_id"], {"next_step_id": "fix"}
+    )
+    await hass.config_entries.async_unload(entry.entry_id)
+    _recreate_solar_api_issue(hass, issue_id)
+
+    flow = await advance_fix_flow(repairs_client, flow["flow_id"])
+
+    assert flow["errors"] == {"base": "cannot_connect"}
+    assert ("solar", False) not in web_client.calls
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+
+def _recreate_solar_api_issue(hass, issue_id: str) -> None:
+    """Removing or unloading the entry takes its issue along; the open dialog stays."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="solar_api_low_firmware",
+    )

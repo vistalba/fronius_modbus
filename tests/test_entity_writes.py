@@ -5,11 +5,13 @@ inverter off the grid on "enabled", or swapped Solar API switch actions, kept
 the whole suite green.
 """
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
 from custom_components.fronius_modbus import entities
+from custom_components.fronius_modbus.button import FroniusButton
 
 storage = call.storage_control
 controls = call.inverter_controls
@@ -132,3 +134,20 @@ async def test_every_control_writes_through_the_right_call(
         await getattr(description, given)(runtime)
 
     assert runtime.mock_calls == [expected]
+
+
+async def test_a_modbus_button_asks_for_a_fresh_poll_after_its_write():
+    """No button reads Modbus yet; one that does must show its effect at once."""
+    runtime = Mock()
+    runtime.modbus.async_request_refresh = AsyncMock()
+    press = AsyncMock()
+    button = FroniusButton.__new__(FroniusButton)
+    button.entity_description = replace(
+        entities.button_descriptions(Mock())[0], source="modbus", press=press
+    )
+    button._runtime = runtime
+
+    await button.async_press()
+
+    press.assert_awaited_once_with(runtime)
+    runtime.modbus.async_request_refresh.assert_awaited_once()

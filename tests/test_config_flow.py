@@ -37,7 +37,7 @@ from .conftest import INVERTER_UNIT_ID
 from .ha_test_plugin import MockConfigEntry
 
 HOST = "192.0.2.10"
-USER_INPUT = {"host": HOST, "scan_interval": 10}
+USER_INPUT = {"host": HOST}
 # Home Assistant's own address towards the inverter, as the socket names it.
 RESOLVED_IP = "192.0.2.50"
 
@@ -118,29 +118,46 @@ async def test_a_new_entry_polls_the_meter_power_with_the_rest(hass, mock_modbus
     assert result["data"]["meter_power_interval"] == 0
 
 
-async def test_a_new_entry_keeps_a_fast_meter_power_interval(hass, mock_modbus):
+async def test_the_setup_form_asks_for_no_update_interval(hass, mock_modbus):
+    """The quality scale leaves the polling intervals to Configure."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {**USER_INPUT, "meter_power_interval": 1}
+
+    fields = set(result["data_schema"].schema)
+    assert not fields & {"scan_interval", "web_scan_interval", "meter_power_interval"}
+
+
+async def test_a_new_entry_starts_with_the_default_intervals(hass, mock_modbus):
+    result = await run_flow(hass)
+
+    assert result["data"]["scan_interval"] == 10
+    assert result["data"]["web_scan_interval"] == 60
+
+
+async def test_configure_keeps_a_fast_meter_power_interval(hass, monkeypatch):
+    entry = make_entry(hass)
+    monkeypatch.setattr(
+        config_flow, "_validate_input", AsyncMock(return_value={"title": "Fronius"})
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"api_password": "secret"}
+    monkeypatch.setattr(
+        hass.config_entries, "async_reload", AsyncMock(return_value=True)
     )
 
-    assert result["data"]["meter_power_interval"] == 1
+    result = await _configure(hass, entry, meter_power_interval=1)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["meter_power_interval"] == 1
 
 
 async def test_a_meter_power_interval_not_below_the_update_interval_is_refused(
-    hass, mock_modbus
+    hass,
 ):
     """A slower fast poll would hide the full poll's newer reading."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {**USER_INPUT, "meter_power_interval": 10}
+    entry = make_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _CONFIGURE_INPUT | {"meter_power_interval": 10}
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -248,18 +265,21 @@ async def test_switching_the_role_asks_for_that_roles_password(hass, monkeypatch
     assert result["errors"]["base"] == "missing_api_password"
 
 
-async def _configure(hass, entry, scan_interval=10):
+_CONFIGURE_INPUT = {
+    "host": HOST,
+    "scan_interval": 10,
+    "web_scan_interval": 60,
+    "modbus_restriction": "keep",
+    "api_username": "customer",
+}
+
+
+async def _configure(hass, entry, scan_interval=10, **settings):
     """Run Configure on the customer role and enter a password."""
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            "host": HOST,
-            "scan_interval": scan_interval,
-            "web_scan_interval": 60,
-            "modbus_restriction": "keep",
-            "api_username": "customer",
-        },
+        _CONFIGURE_INPUT | {"scan_interval": scan_interval, **settings},
     )
     assert result["step_id"] == "password"
     return await hass.config_entries.options.async_configure(
