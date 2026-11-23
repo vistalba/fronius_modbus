@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import json
 import logging
 import re
@@ -39,7 +39,7 @@ from .token_store import async_forget_unused_tokens, async_get_token_store
 
 _LOGGER = logging.getLogger(__name__)
 _TRANSLATIONS_DIR = Path(__file__).resolve().parent / "translations"
-_TRANSLATION_CACHE: dict[str, dict] = {}
+_TRANSLATION_CACHE: dict[str, dict[str, Any]] = {}
 
 _TARGET_VERSION = 1
 # 15: the options hold the update intervals alone and the data the
@@ -119,19 +119,22 @@ V019_METER_UNIT_ID = "_v019_meter_unit_id"
 V019_METER_UNKNOWN = "unknown"
 
 
-def _entry_value(entry: ConfigEntry, key: str, default=None):
+def _entry_value(entry: ConfigEntry, key: str, default: Any = None) -> Any:
     return entry.options.get(key, entry.data.get(key, default))
 
 
 REPORTED_OPTION = "reported"
 
 
-def _entity_entries_for_config_entry(registry, entry: ConfigEntry):
+def _entity_entries_for_config_entry(
+    registry: er.EntityRegistry, entry: ConfigEntry
+) -> list[er.RegistryEntry]:
     return list(er.async_entries_for_config_entry(registry, entry.entry_id))
 
 
 def _marked_reported(entity_entry: er.RegistryEntry) -> bool:
-    return bool(entity_entry.options.get(DOMAIN, {}).get(REPORTED_OPTION))
+    options: Mapping[str, Any] = entity_entry.options.get(DOMAIN, {})
+    return bool(options.get(REPORTED_OPTION))
 
 
 def v019_meter_unit_id(
@@ -342,7 +345,14 @@ def async_drop_stored_issues(hass: HomeAssistant) -> None:
     for (domain, issue_id), issue in list(registry.issues.items()):
         if domain != DOMAIN or not issue.is_persistent:
             continue
-        if not any(issue_id.endswith(entry_id) for entry_id in entry_ids):
+        fixable, severity, key = issue.is_fixable, issue.severity, issue.translation_key
+        # A stored issue without these fields cannot be raised again.
+        if (
+            fixable is None
+            or severity is None
+            or key is None
+            or not any(issue_id.endswith(entry_id) for entry_id in entry_ids)
+        ):
             ir.async_delete_issue(hass, DOMAIN, issue_id)
             continue
         ir.async_create_issue(
@@ -351,12 +361,12 @@ def async_drop_stored_issues(hass: HomeAssistant) -> None:
             issue_id,
             breaks_in_ha_version=issue.breaks_in_ha_version,
             data=issue.data,
-            is_fixable=issue.is_fixable,
+            is_fixable=fixable,
             is_persistent=False,
             issue_domain=issue.issue_domain,
             learn_more_url=issue.learn_more_url,
-            severity=issue.severity,
-            translation_key=issue.translation_key,
+            severity=severity,
+            translation_key=key,
             translation_placeholders=issue.translation_placeholders,
         )
 
@@ -373,8 +383,10 @@ def _legacy_device_identifiers(entry: ConfigEntry) -> set[str]:
     }
 
 
-def _legacy_device_needs_removal(entry: ConfigEntry, device, current: set[str]) -> bool:
-    identifiers = getattr(device, "identifiers", set())
+def _legacy_device_needs_removal(
+    entry: ConfigEntry, device: dr.DeviceEntry, current: set[str]
+) -> bool:
+    identifiers: set[tuple[str, str]] = getattr(device, "identifiers", set())
     return any(
         identifier_domain == DOMAIN
         and identifier not in current
@@ -399,14 +411,17 @@ def _entry_instance_key(entry: ConfigEntry) -> str:
     return instance_key(entry.entry_id)
 
 
-def _read_translation_data(path: Path) -> dict:
+def _read_translation_data(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        return data
     except FileNotFoundError, json.JSONDecodeError:
         return {}
 
 
-async def _async_load_translation_data(hass: HomeAssistant, language: str) -> dict:
+async def _async_load_translation_data(
+    hass: HomeAssistant, language: str
+) -> dict[str, Any]:
     if language not in _TRANSLATION_CACHE:
         path = _TRANSLATIONS_DIR / f"{language}.json"
         _TRANSLATION_CACHE[language] = await hass.async_add_executor_job(
@@ -703,7 +718,8 @@ def _v019_string_device_name(
         return inverter.name_by_user
     if entry.runtime_data.device.identity is None:
         return None
-    return device_info(entry.runtime_data, entry, "inverter").get("name")
+    name: str | None = device_info(entry.runtime_data, entry, "inverter").get("name")
+    return name
 
 
 def _move_unique_id(
@@ -711,7 +727,7 @@ def _move_unique_id(
     entity_entry: er.RegistryEntry,
     new_unique_id: str,
     expected: set[str],
-    taken: set[tuple[str, str | None]],
+    taken: set[tuple[str, str]],
 ) -> bool:
     """Give a registry entry its new id, if it is expected and free on its platform."""
     target = (entity_entry.domain, new_unique_id)

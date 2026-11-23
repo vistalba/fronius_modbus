@@ -7,7 +7,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import FroniusConfigEntry
-from .entities import FroniusNumberDescription, number_descriptions
+from .descriptions import FroniusNumberDescription
+from .entities import number_descriptions
 from .entity import FroniusEntity
 
 # Unlimited: every write path serialises itself (the controls' and the web
@@ -22,9 +23,10 @@ class FroniusNumber(FroniusEntity, NumberEntity):
     entity_description: FroniusNumberDescription
 
     @property
-    def native_value(self):
+    def native_value(self) -> float | None:
         """The description's value for the current runtime."""
-        return self.entity_description.value_fn(self._runtime)
+        value: float | None = self.entity_description.value_fn(self._runtime)
+        return value
 
     @property
     def native_max_value(self) -> float:

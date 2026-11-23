@@ -18,24 +18,9 @@ import tomllib
 REPO = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "custom_components" / "fronius_modbus"
 
-# What is deliberately still outside, and why. Emptying this list is the
-# point; every entry is a promise, not a permanent exemption.
-_UNTYPED = "ported from 0.3 untyped"
-NOT_TYPE_CHECKED_YET = {
-    "__init__.py": _UNTYPED,
-    "button.py": _UNTYPED,
-    "config_flow.py": _UNTYPED,
-    "diagnostics.py": _UNTYPED,
-    "froniuswebclient.py": _UNTYPED,
-    "migrations.py": _UNTYPED,
-    "number.py": _UNTYPED,
-    "repairs.py": _UNTYPED,
-    "select.py": _UNTYPED,
-    "sensor.py": _UNTYPED,
-    "switch.py": _UNTYPED,
-    "token_store.py": _UNTYPED,
-    "web_control.py": _UNTYPED,
-}
+# What is deliberately still outside, and why. Empty since 1.5: every module
+# is checked strictly. A module added here needs a line saying what is in the way.
+NOT_TYPE_CHECKED_YET: dict[str, str] = {}
 
 
 def _modules_in_the_mypy_scope() -> set:
@@ -87,6 +72,14 @@ def test_nothing_is_declared_unchecked_and_checked_at_once():
         f"{sorted(both)} are type-checked now - drop them from "
         "NOT_TYPE_CHECKED_YET, which is what emptying it looks like."
     )
+
+
+def test_the_whole_package_is_checked_strictly():
+    """The quality scale's strict-typing: every module, with mypy's strict mode."""
+    configuration = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert configuration["tool"]["mypy"].get("strict") is True
+    assert _modules_in_the_package() <= _modules_in_the_mypy_scope()
 
 
 def test_no_promise_outlives_its_module():

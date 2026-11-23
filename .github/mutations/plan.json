@@ -793,7 +793,7 @@
   {
     "label": "web client: the SoC window is checked against the fresh read",
     "path": "custom_components/fronius_modbus/froniuswebclient.py",
-    "old": "        if lower > upper:\n",
+    "old": "        if cast(float, lower) > cast(float, upper):\n",
     "new": "        if False:\n",
     "tests": "soc_window_is_checked_against_the_fresh_read"
   },
@@ -1549,7 +1549,7 @@
   {
     "label": "token store: concurrent first loads share one dictionary",
     "path": "custom_components/fronius_modbus/token_store.py",
-    "old": "        loaded = await self._store.async_load()\n        if self._cache is not None:\n",
+    "old": "        loaded = await self._store.async_load()\n        if (cache := self._loaded_meanwhile()) is not None:\n",
     "new": "        loaded = await self._store.async_load()\n        if False:\n",
     "tests": "two_first_setups_at_once_keep_both_tokens"
   },
@@ -2942,8 +2942,8 @@
   {
     "label": "migrations: a 0.1.9 string named after the inverter device to come",
     "path": "custom_components/fronius_modbus/migrations.py",
-    "old": "    return device_info(entry.runtime_data, entry, \"inverter\").get(\"name\")\n",
-    "new": "    return None\n",
+    "old": "    name: str | None = device_info(entry.runtime_data, entry, \"inverter\").get(\"name\")\n",
+    "new": "    name = None\n",
     "tests": "string_of_an_entry_without_devices_is_named_after_the_inverter"
   },
   {
@@ -3166,8 +3166,8 @@
   {
     "label": "migrations: an entry's own stored issue keeps the owner's ignore",
     "path": "custom_components/fronius_modbus/migrations.py",
-    "old": "        if not any(issue_id.endswith(entry_id) for entry_id in entry_ids):\n",
-    "new": "        if True:\n",
+    "old": "            or not any(issue_id.endswith(entry_id) for entry_id in entry_ids)\n",
+    "new": "            or True\n",
     "tests": "earlier_version_stored"
   },
   {

@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import timedelta
 import logging
 import time
+from typing import Any
 
 from modbus_connection import ModbusTcpParams
 
@@ -59,16 +60,16 @@ PLATFORMS = [
 ]
 
 
-def _entry_value(entry: ConfigEntry, key: str, default=None):
+def _entry_value(entry: ConfigEntry, key: str, default: Any = None) -> Any:
     return entry.options.get(key, entry.data.get(key, default))
 
 
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_migrate_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> bool:
     """Migrate an old config entry to the current version."""
     return await migrations.async_migrate_entry(hass, entry)
 
 
-async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_reload_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 

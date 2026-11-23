@@ -319,6 +319,19 @@ files = [
   "custom_components/fronius_modbus/adoption.py",
   "custom_components/fronius_modbus/web_session.py",
   "custom_components/fronius_modbus/web_transport.py",
+  "custom_components/fronius_modbus/__init__.py",
+  "custom_components/fronius_modbus/button.py",
+  "custom_components/fronius_modbus/config_flow.py",
+  "custom_components/fronius_modbus/diagnostics.py",
+  "custom_components/fronius_modbus/froniuswebclient.py",
+  "custom_components/fronius_modbus/migrations.py",
+  "custom_components/fronius_modbus/number.py",
+  "custom_components/fronius_modbus/repairs.py",
+  "custom_components/fronius_modbus/select.py",
+  "custom_components/fronius_modbus/sensor.py",
+  "custom_components/fronius_modbus/switch.py",
+  "custom_components/fronius_modbus/token_store.py",
+  "custom_components/fronius_modbus/web_control.py",
 ]
 
 # Path tracking rules
@@ -326,6 +339,7 @@ mypy_path = "/usr/src/homeassistant"
 explicit_package_bases = true
 
 # --- OFFICIAL HOME ASSISTANT CI STRICT CORE FLAGS ---
+strict = true
 show_error_codes = true
 follow_imports = "silent"
 ignore_missing_imports = true

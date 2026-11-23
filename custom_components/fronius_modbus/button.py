@@ -7,7 +7,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import FroniusConfigEntry
-from .entities import FroniusButtonDescription, button_descriptions
+from .descriptions import FroniusButtonDescription
+from .entities import button_descriptions
 from .entity import FroniusEntity
 
 # One write at a time: the inverter answers requests one after the other.

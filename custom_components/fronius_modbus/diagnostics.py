@@ -34,6 +34,11 @@ async def _async_registers(runtime: FroniusRuntimeData) -> dict[str, Any]:
     }
 
 
+def _redacted_identity(runtime: FroniusRuntimeData) -> dict[str, Any] | None:
+    identity = runtime.device.identity
+    return None if identity is None else identity._replace(serial=REDACTED)._asdict()
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: FroniusConfigEntry
 ) -> dict[str, Any]:
@@ -43,7 +48,7 @@ async def async_get_config_entry_diagnostics(
     poll = runtime.modbus.data
     web_data = runtime.web_data
     return {
-        "identity": runtime.device.identity._replace(serial=REDACTED)._asdict(),
+        "identity": _redacted_identity(runtime),
         "updated": sorted(poll.report.updated),
         "failed": {name: error_text(err) for name, err in poll.report.failed.items()},
         "registers": await _async_registers(runtime),

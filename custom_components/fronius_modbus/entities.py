@@ -18,7 +18,7 @@ from typing import Any
 
 from homeassistant.components.number import NumberMode
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.helpers.entity import EntityCategory
+from homeassistant.const import EntityCategory
 
 from .component_readings import (
     COMPONENT_READINGS,
@@ -867,19 +867,24 @@ _TRANSLATION_KEYS: dict[str, str] = {
 }
 
 
+type _MeterSpec = tuple[
+    str, Callable[[Any], Any], SensorDeviceClass, SensorStateClass, str
+]
+
+
 def _meter_spec(
     suffix: str,
     attribute: str,
     device_class: SensorDeviceClass,
     state_class: SensorStateClass,
     unit: str,
-) -> tuple:
+) -> _MeterSpec:
     return (suffix, attrgetter(attribute), device_class, state_class, unit)
 
 
 def _phase_specs(
     suffix: str, attribute: str, device_class: SensorDeviceClass, unit: str
-) -> tuple[tuple, ...]:
+) -> tuple[_MeterSpec, ...]:
     """One spec per phase: `AphA`/`aph_a` for L1, and so on."""
     return tuple(
         _meter_spec(
@@ -899,7 +904,7 @@ _CURRENT, _POWER, _VOLTAGE = (
     SensorDeviceClass.VOLTAGE,
 )
 _MEASUREMENT, _ENERGY = SensorStateClass.MEASUREMENT, SensorDeviceClass.ENERGY
-_METER_SENSOR_SPECS: tuple[tuple, ...] = (
+_METER_SENSOR_SPECS: tuple[_MeterSpec, ...] = (
     _meter_spec("A", "a", _CURRENT, _MEASUREMENT, "A"),
     *_phase_specs("Aph", "aph", _CURRENT, "A"),
     _meter_spec("power", "w", _POWER, _MEASUREMENT, "W"),
@@ -918,7 +923,7 @@ _METER_SENSOR_SPECS: tuple[tuple, ...] = (
 )
 # Per-phase counters some meters or firmware leave at 0, SunSpec's "not
 # implemented" for a counter: they exist once counted, disabled at first.
-_METER_PHASE_ENERGY_SPECS: tuple[tuple, ...] = tuple(
+_METER_PHASE_ENERGY_SPECS: tuple[_MeterSpec, ...] = tuple(
     _meter_spec(
         f"TotWh{direction}Ph{phase}",
         f"tot_wh_{direction.lower()}_ph_{phase.lower()}",

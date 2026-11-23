@@ -70,9 +70,9 @@ migration, or anything listed in `.github/mutations/plan.json`.
 - Module ceiling of 900 lines and cognitive complexity of 15 per function
   (`tests/test_budgets.py`). The listed exceptions are exact ratchets: when
   code grows or shrinks, change the budget entry in the same commit.
-- Every package module is either in `[tool.mypy] files` or listed with a reason
-  in `tests/test_mypy_scope.py`. A new module needs one of the two; prefer
-  typing it.
+- Every package module is in `[tool.mypy] files`, checked with `strict = true`
+  (quality scale strict-typing, `tests/test_mypy_scope.py`). A new module is
+  typed from the start.
 - LF line endings only, in every text file (`tests/test_line_endings.py`).
 - The CI workflow and `check.sh` must run the same tools
   (`tests/test_guards.py`), and `tests/test_ci_matrix.py` asserts literal

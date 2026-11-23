@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any
 
 from modbus_connection import ModbusError, ModbusTcpParams
 import voluptuous as vol
@@ -86,9 +87,9 @@ from .fronius_modbus_api.device import FroniusInverter
 from .fronius_modbus_api.exceptions import error_text
 from .web_session import async_web_session
 from .web_transport import mint_token
-from .froniuswebclient import (
+from .froniuswebclient import FroniusWebClient
+from .web_errors import (
     ClientIpResolutionError,
-    FroniusWebClient,
     FroniusWebResponseError,
     SunSpecModeChangeNeeded,
 )
@@ -102,11 +103,11 @@ _LOGGER = logging.getLogger(__name__)
 
 type _FlowFinishCallback = Callable[
     [dict[str, Any], dict[str, Any], str | None],
-    Awaitable[Any],
+    Awaitable[config_entries.ConfigFlowResult],
 ]
 
 
-type _FlowRestartCallback = Callable[[], Awaitable[Any]]
+type _FlowRestartCallback = Callable[[], Awaitable[config_entries.ConfigFlowResult]]
 
 
 type _HostClaim = Callable[[dict[str, Any]], Awaitable[None]]
@@ -361,6 +362,21 @@ class TokenFlowMixin:
     _pending_flow_state: _PendingFlowState | None = None
     hass: HomeAssistant
 
+    if TYPE_CHECKING:
+        # The flow classes this mixes into provide it. The schema is
+        # voluptuous, which the minimum Home Assistant 2026.9 types this
+        # argument with; 2026.10 types it with probatio and takes either.
+        def async_show_form(
+            self,
+            *,
+            step_id: str | None = None,
+            data_schema: Any = None,
+            errors: dict[str, str] | None = None,
+            description_placeholders: Mapping[str, str] | None = None,
+            last_step: bool | None = None,
+            preview: str | None = None,
+        ) -> config_entries.ConfigFlowResult: ...
+
     async def _async_claim_entry_host(
         self, entry: config_entries.ConfigEntry, settings: dict[str, Any]
     ) -> None:
@@ -371,7 +387,7 @@ class TokenFlowMixin:
         *,
         step_id: str,
         errors: dict[str, str] | None = None,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         state = self._pending_flow_state
         placeholders = None
         if state is not None:
@@ -393,7 +409,7 @@ class TokenFlowMixin:
         *,
         step_id: str,
         errors: dict[str, str] | None = None,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         state = self._pending_flow_state
         assert state is not None
         return self.async_show_form(
@@ -415,7 +431,7 @@ class TokenFlowMixin:
         *,
         minted: bool,
         step_id: str,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Hold the flow where it stopped and ask before switching the model type."""
         state.login_token = token
         state.token_minted = minted
@@ -432,7 +448,7 @@ class TokenFlowMixin:
         restart_step: _FlowRestartCallback,
         claim_host: _HostClaim,
         on_success: _FlowFinishCallback,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Switch the model type once the owner agreed, then finish as asked.
 
         Nothing was written before the question, and a flow left here writes
@@ -478,7 +494,7 @@ class TokenFlowMixin:
         *,
         minted: bool,
         step_ids: tuple[str, str],
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Hold the flow for the question the Modbus settings raised before a write."""
         sunspec_step_id, allowed_host_step_id = step_ids
         if isinstance(needed, _AllowedHostNeeded):
@@ -497,7 +513,7 @@ class TokenFlowMixin:
         *,
         minted: bool,
         step_id: str,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Hold the flow where it stopped and show the address before it is allowed."""
         state.login_token = token
         state.token_minted = minted
@@ -510,7 +526,7 @@ class TokenFlowMixin:
         *,
         step_id: str,
         errors: dict[str, str] | None = None,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         state = self._pending_flow_state
         assert state is not None and state.resolved_host is not None
         return self.async_show_form(
@@ -533,7 +549,7 @@ class TokenFlowMixin:
         restart_step: _FlowRestartCallback,
         claim_host: _HostClaim,
         on_success: _FlowFinishCallback,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Write the restriction with the confirmed address, then finish as asked."""
         errors: dict[str, str] = {}
         state = self._pending_flow_state
@@ -592,7 +608,7 @@ class TokenFlowMixin:
         claim_host: _HostClaim,
         on_success: _FlowFinishCallback,
         build_schema: Callable[[dict[str, Any]], vol.Schema] = settings_schema,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -685,7 +701,7 @@ class TokenFlowMixin:
         restart_step: _FlowRestartCallback,
         claim_host: _HostClaim,
         on_success: _FlowFinishCallback,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         errors: dict[str, str] = {}
         state = self._pending_flow_state
         if state is None:
@@ -739,7 +755,7 @@ class TokenFlowMixin:
         state: _PendingFlowState,
         info: dict[str, Any],
         minted: dict[str, str] | None,
-    ):
+    ) -> config_entries.ConfigFlowResult:
         """Keep a minted token only for a checked inverter and a finished flow.
 
         Saved first, a failed check or an aborted flow left a password-equivalent
@@ -802,7 +818,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> FroniusModbusOptionsFlow:
         return FroniusModbusOptionsFlow()
 
     def _flow_entry(self) -> config_entries.ConfigEntry | None:
@@ -836,7 +854,12 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
     async def _async_claim_reconfigured_host(self, settings: dict[str, Any]) -> None:
         await self._async_claim_entry_host(self._get_reconfigure_entry(), settings)
 
-    async def _async_finish_user(self, settings, info, previous_host):
+    async def _async_finish_user(
+        self,
+        settings: dict[str, Any],
+        info: dict[str, Any],
+        previous_host: str | None,
+    ) -> config_entries.ConfigFlowResult:
         del previous_host
         host_id = entry_unique_id(settings)
         # The serial number stays when the inverter gets another address; the
@@ -851,7 +874,12 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_create_entry(title=info["title"], data=data, options=options)
 
-    async def _async_finish_reconfigure(self, settings, info, previous_host):
+    async def _async_finish_reconfigure(
+        self,
+        settings: dict[str, Any],
+        info: dict[str, Any],
+        previous_host: str | None,
+    ) -> config_entries.ConfigFlowResult:
         del info
         entry = self._get_reconfigure_entry()
         await async_update_entry_from_input(
@@ -862,7 +890,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_abort(reason="reconfigure_successful")
 
-    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo):
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> config_entries.ConfigFlowResult:
         host = str(discovery_info.ip_address)
         serial = discovered_serial(discovery_info.properties)
         entry = entry_for_serial(self.hass, serial)
@@ -892,7 +922,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
         }
         return await self.async_step_user()
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_settings_step(
             user_input=user_input,
             step_id="user",
@@ -907,7 +939,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             build_schema=setup_schema,
         )
 
-    async def async_step_user_password(self, user_input=None):
+    async def async_step_user_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_password_step(
             user_input=user_input,
             step_id="user_password",
@@ -918,7 +952,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_user,
         )
 
-    async def async_step_user_sunspec(self, user_input=None):
+    async def async_step_user_sunspec(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_sunspec_step(
             user_input=user_input,
             step_id="user_sunspec",
@@ -927,7 +963,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_user,
         )
 
-    async def async_step_user_allowed_host(self, user_input=None):
+    async def async_step_user_allowed_host(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_allowed_host_step(
             user_input=user_input,
             step_id="user_allowed_host",
@@ -937,7 +975,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_user,
         )
 
-    async def async_step_reconfigure(self, user_input=None):
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         entry = self._get_reconfigure_entry()
         defaults = entry_defaults(entry)
         return await self._async_handle_settings_step(
@@ -954,7 +994,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_reconfigure,
         )
 
-    async def async_step_reconfigure_password(self, user_input=None):
+    async def async_step_reconfigure_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_password_step(
             user_input=user_input,
             step_id="reconfigure_password",
@@ -965,7 +1007,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_reconfigure,
         )
 
-    async def async_step_reconfigure_sunspec(self, user_input=None):
+    async def async_step_reconfigure_sunspec(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_sunspec_step(
             user_input=user_input,
             step_id="reconfigure_sunspec",
@@ -974,7 +1018,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_reconfigure,
         )
 
-    async def async_step_reconfigure_allowed_host(self, user_input=None):
+    async def async_step_reconfigure_allowed_host(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_allowed_host_step(
             user_input=user_input,
             step_id="reconfigure_allowed_host",
@@ -990,7 +1036,12 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             raise data_entry_flow.AbortFlow("entry_not_found")
         await self._async_claim_entry_host(entry, settings)
 
-    async def _async_finish_reauth(self, settings, info, previous_host):
+    async def _async_finish_reauth(
+        self,
+        settings: dict[str, Any],
+        info: dict[str, Any],
+        previous_host: str | None,
+    ) -> config_entries.ConfigFlowResult:
         del info
         entry = self._flow_entry()
         if entry is None:
@@ -1006,11 +1057,15 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_abort(reason="reauth_successful")
 
-    async def async_step_reauth(self, entry_data):
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> config_entries.ConfigFlowResult:
         del entry_data
         return await self.async_step_reauth_confirm()
 
-    async def async_step_reauth_confirm(self, user_input=None):
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         defaults = entry_defaults(self._get_reauth_entry())
         return await self._async_handle_settings_step(
             user_input=user_input,
@@ -1027,7 +1082,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             build_schema=role_schema,
         )
 
-    async def async_step_reauth_password(self, user_input=None):
+    async def async_step_reauth_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_password_step(
             user_input=user_input,
             step_id="reauth_password",
@@ -1038,7 +1095,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_reauth,
         )
 
-    async def async_step_reauth_sunspec(self, user_input=None):
+    async def async_step_reauth_sunspec(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_sunspec_step(
             user_input=user_input,
             step_id="reauth_sunspec",
@@ -1047,7 +1106,9 @@ class ConfigFlow(TokenFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
             on_success=self._async_finish_reauth,
         )
 
-    async def async_step_reauth_allowed_host(self, user_input=None):
+    async def async_step_reauth_allowed_host(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_allowed_host_step(
             user_input=user_input,
             step_id="reauth_allowed_host",
@@ -1067,7 +1128,12 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
     async def _async_claim_host(self, settings: dict[str, Any]) -> None:
         await self._async_claim_entry_host(self.config_entry, settings)
 
-    async def _async_finish_options(self, settings, info, previous_host):
+    async def _async_finish_options(
+        self,
+        settings: dict[str, Any],
+        info: dict[str, Any],
+        previous_host: str | None,
+    ) -> config_entries.ConfigFlowResult:
         del info
         unique_id = _claim_host(self.hass, self.config_entry, settings)
         data, options = entry_storage(
@@ -1089,13 +1155,15 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
             data=data,
             options=options,
         )
-        await async_forget_unused_tokens(self.hass, previous_host)
+        await async_forget_unused_tokens(self.hass, previous_host or "")
         await _async_reload_unless_listened(
             self.hass, self.config_entry, changed=changed, loaded=loaded
         )
         return self.async_create_entry(title="", data=options)
 
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         defaults = entry_defaults(self.config_entry)
         return await self._async_handle_settings_step(
             user_input=user_input,
@@ -1113,7 +1181,9 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
             on_success=self._async_finish_options,
         )
 
-    async def async_step_password(self, user_input=None):
+    async def async_step_password(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_password_step(
             user_input=user_input,
             step_id="password",
@@ -1124,7 +1194,9 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
             on_success=self._async_finish_options,
         )
 
-    async def async_step_sunspec(self, user_input=None):
+    async def async_step_sunspec(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_sunspec_step(
             user_input=user_input,
             step_id="sunspec",
@@ -1133,7 +1205,9 @@ class FroniusModbusOptionsFlow(TokenFlowMixin, config_entries.OptionsFlow):
             on_success=self._async_finish_options,
         )
 
-    async def async_step_allowed_host(self, user_input=None):
+    async def async_step_allowed_host(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return await self._async_handle_allowed_host_step(
             user_input=user_input,
             step_id="allowed_host",

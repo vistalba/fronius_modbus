@@ -120,5 +120,9 @@ rules:
       async_create_clientsession, with no cookie jar: the client never kept
       the inverter's cookies, and must not hand them to anything else.
   strict-typing:
-    status: todo
-    comment: Not every module is in the mypy scope yet (tests/test_mypy_scope.py).
+    status: done
+    comment: >-
+      A custom integration, so not in core's .strict-typing: every module is in
+      the mypy scope with strict = true, checked in CI and by
+      tests/test_mypy_scope.py. modbus-connection ships py.typed. The entry
+      points take the typed FroniusConfigEntry.

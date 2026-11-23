@@ -9,8 +9,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import UNKNOWN_STATE
-from .coordinator import FroniusConfigEntry, FroniusMeterPowerCoordinator
-from .entities import FroniusSensorDescription, sensor_descriptions
+from .coordinator import (
+    FroniusConfigEntry,
+    FroniusMeterPowerCoordinator,
+    FroniusRuntimeData,
+)
+from .descriptions import FroniusSensorDescription
+from .entities import sensor_descriptions
 from .entity import FroniusEntity, FroniusTotalSensor
 from .mppt_entities import left_out_mppt_keys
 
@@ -28,7 +33,7 @@ class FroniusSensor(FroniusEntity, SensorEntity):
     @classmethod
     def create(
         cls,
-        runtime,
+        runtime: FroniusRuntimeData,
         entry: FroniusConfigEntry,
         description: FroniusSensorDescription,
     ) -> FroniusEntity:
@@ -78,7 +83,7 @@ class FroniusSensor(FroniusEntity, SensorEntity):
         return None if attributes_fn is None else attributes_fn(self._runtime)
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         """The description's value; for an enum, one of its options or unknown.
 
         A state outside the options fails every state write. A flag or code

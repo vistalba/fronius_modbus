@@ -7,7 +7,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import FroniusConfigEntry, FroniusRuntimeData
-from .entities import FroniusEventDescription, event_descriptions
+from .descriptions import FroniusEventDescription
+from .entities import event_descriptions
 from .entity import FroniusEntity
 from .event_entities import event_attributes, for_audience
 from .inverter_events import UNCLASSIFIED_SEVERITY

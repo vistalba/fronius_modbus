@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .const import DEFAULT_METER_UNIT_ID
 
@@ -34,7 +35,7 @@ class MeterTopology:
         return tuple(self.unit_ids)
 
 
-def parse_meter_topology(info: dict | None) -> MeterTopology:
+def parse_meter_topology(info: dict[str, Any] | None) -> MeterTopology:
     """The topology an answer describes, or the unconfirmed single-meter default."""
     default = MeterTopology([DEFAULT_METER_UNIT_ID], DEFAULT_METER_UNIT_ID, {}, False)
     if not info or not info.get("unit_ids"):

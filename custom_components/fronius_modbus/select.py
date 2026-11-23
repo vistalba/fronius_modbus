@@ -9,7 +9,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import FroniusConfigEntry
-from .entities import FroniusSelectDescription, select_descriptions
+from .descriptions import FroniusSelectDescription
+from .entities import select_descriptions
 from .entity import FroniusEntity
 
 # One write at a time: the inverter answers requests one after the other.
@@ -24,7 +25,8 @@ class FroniusSelect(FroniusEntity, SelectEntity):
     @property
     def current_option(self) -> str | None:
         """The description's current label for the current runtime."""
-        return self.entity_description.value_fn(self._runtime)
+        option: str | None = self.entity_description.value_fn(self._runtime)
+        return option
 
     async def async_select_option(self, option: str) -> None:
         """Resolve the label to its code, write it, then request a refresh."""

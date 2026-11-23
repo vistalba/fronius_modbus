@@ -12,7 +12,7 @@ import logging
 import math
 import socket
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -182,6 +182,11 @@ def _nested_object(config: dict[str, Any], key: str, path: str) -> dict[str, Any
     otherwise be written back with defaults.
     """
     return _config_object(config.get(key, {}), path)
+
+
+def _mode_with_tcp(mode: Any) -> str:
+    """The slave mode that adds Modbus TCP to ``mode``; an unknown one becomes tcp."""
+    return _MODE_WITH_TCP.get(mode, "tcp") if isinstance(mode, str) else "tcp"
 
 
 def _is_number(value: Any) -> bool:
@@ -361,7 +366,7 @@ class FroniusWebClient:
         self,
         method: str,
         path: str,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         *,
         authenticated: bool = True,
     ) -> WebResponse:
@@ -385,10 +390,14 @@ class FroniusWebClient:
         return response
 
     async def _get_json(self, path: str) -> dict[str, Any]:
-        return (await self._request("get", path)).json()
+        payload: dict[str, Any] = (await self._request("get", path)).json()
+        return payload
 
     async def _get_public_json(self, path: str) -> dict[str, Any]:
-        return (await self._request("get", path, authenticated=False)).json()
+        payload: dict[str, Any] = (
+            await self._request("get", path, authenticated=False)
+        ).json()
+        return payload
 
     async def _post(self, path: str, payload: dict[str, Any] | None = None) -> None:
         """Write, and fail on a field the inverter names as refused.
@@ -444,7 +453,7 @@ class FroniusWebClient:
             address = await _ipv4_address(self._host)
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.connect((address, 80))
-                client_ip = sock.getsockname()[0]
+                client_ip: str = sock.getsockname()[0]
         except OSError as err:
             raise ClientIpResolutionError(
                 f"Failed resolving local IP for {self._host}"
@@ -600,7 +609,7 @@ class FroniusWebClient:
             "slave": {
                 **slave,
                 "rtuif": slave.get("rtuif", []),
-                "mode": _MODE_WITH_TCP.get(slave.get("mode"), "tcp"),
+                "mode": _mode_with_tcp(slave.get("mode")),
                 "port": port,
                 "sunspecMode": SUNSPEC_MODE_INT,
                 "meterAddress": meter_address,
@@ -680,7 +689,7 @@ class FroniusWebClient:
             raise FroniusWebResponseError(
                 f"HTTP 200 on {BATTERIES_PATH} answered no SoC window", HTTPStatus.OK
             )
-        if lower > upper:
+        if cast(float, lower) > cast(float, upper):
             raise ControlRefused(
                 "soc_minimum_above_maximum", "SoC Minimum must not exceed SoC Maximum"
             )

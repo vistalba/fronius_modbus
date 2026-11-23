@@ -8,6 +8,7 @@ core); a rule added there and missing here turns this test red once copied in.
 
 import json
 import pathlib
+import tomllib
 
 import pytest
 import yaml
@@ -199,3 +200,15 @@ def test_a_done_inject_websession_passes_a_session_to_every_client():
         constructions = source.count("FroniusWebClient(")
         assert constructions
         assert source.count("session=async_web_session(hass)") >= constructions, name
+
+
+def test_a_done_strict_typing_runs_mypy_strictly_over_every_module():
+    if not _done("strict-typing"):
+        pytest.skip("not claimed")
+    configuration = tomllib.loads(
+        (PACKAGE.parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    mypy = configuration["tool"]["mypy"]
+    checked = {pathlib.Path(name).name for name in mypy["files"]}
+    assert mypy.get("strict") is True
+    assert {source.name for source in PACKAGE.glob("*.py")} <= checked

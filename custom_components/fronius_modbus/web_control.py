@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 import functools
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Concatenate
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -31,12 +31,7 @@ from .fronius_modbus_api.exceptions import (
     ControlUnavailable,
     error_text,
 )
-from .froniuswebclient import (
-    ENDPOINT_MISSING,
-    FroniusWebAuthError,
-    FroniusWebClient,
-    is_enabled,
-)
+from .froniuswebclient import ENDPOINT_MISSING, FroniusWebClient, is_enabled
 from .inverter_events import (
     ACTIVE_EVENTS_PATH,
     EVENT_LOG_PATH,
@@ -49,6 +44,7 @@ from .inverter_events import (
 )
 from .meter_topology import MeterTopology, parse_meter_topology
 from .token_store import async_get_token_store
+from .web_errors import FroniusWebAuthError
 
 _LOGGER = logging.getLogger(__name__)
 # The log is ~60 KB on a GEN24 two years in; its entries keep their own time,
@@ -69,18 +65,26 @@ def soc_minimum_login_lost() -> ControlUnavailable:
     )
 
 
-def _serialised(method):
+type _Setter[**P, R] = Callable[
+    Concatenate[FroniusWebControl, P], Coroutine[Any, Any, R]
+]
+
+
+def _serialised[**P, R](method: _Setter[P, R]) -> _Setter[P, R]:
     """Run one web write at a time: every setter reads state, composes a payload and writes it back."""
 
-    @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(
+        self: FroniusWebControl, /, *args: P.args, **kwargs: P.kwargs
+    ) -> R:
         async with self._write_lock:
             return await method(self, *args, **kwargs)
 
+    # In place, so the wrapper keeps its own precise type.
+    functools.update_wrapper(wrapper, method)
     return wrapper
 
 
-def _last_writer_wins(method):
+def _last_writer_wins[**P, R](method: _Setter[P, R]) -> _Setter[P, R | None]:
     """Serialise like _serialised, but a burst reaches the device as its first and last value.
 
     Every call takes a ticket; whoever holds the lock while a newer ticket
@@ -91,8 +95,9 @@ def _last_writer_wins(method):
     ticket: an older one still waiting writes, one that gave way does not.
     """
 
-    @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(
+        self: FroniusWebControl, /, *args: P.args, **kwargs: P.kwargs
+    ) -> R | None:
         ticket = self._tickets[method.__name__] = (
             self._tickets.get(method.__name__, 0) + 1
         )
@@ -106,6 +111,8 @@ def _last_writer_wins(method):
         finally:
             waiting.discard(ticket)
 
+    # In place, so the wrapper keeps its own precise type.
+    functools.update_wrapper(wrapper, method)
     return wrapper
 
 
@@ -304,7 +311,7 @@ class FroniusWebControl:
         self._waiting_tickets: dict[str, set[int]] = {}
         self.data = WebData()
         self._coordinator: Any = None
-        self._delayed_refresh_task: asyncio.Task | None = None
+        self._delayed_refresh_task: asyncio.Task[None] | None = None
         # A write still in flight at unload must not start a refresh of the
         # unloaded entry once it returns.
         self._shut_down = False
@@ -418,7 +425,12 @@ class FroniusWebControl:
 
     # -- job runners -----------------------------------------------------------------
 
-    async def _async_web_job(self, func, *args, raise_on_auth_failure: bool = False):
+    async def _async_web_job(
+        self,
+        func: Callable[..., Coroutine[Any, Any, Any]],
+        *args: Any,
+        raise_on_auth_failure: bool = False,
+    ) -> Any:
         if not self._client:
             if raise_on_auth_failure:
                 raise ControlUnavailable(
@@ -437,7 +449,9 @@ class FroniusWebControl:
                 ) from err
             return None
 
-    async def _async_until_done(self, func, *args):
+    async def _async_until_done(
+        self, func: Callable[..., Coroutine[Any, Any, Any]], *args: Any
+    ) -> Any:
         """Run func as a task of its own and wait for its end, even when cancelled.
 
         A write must not stop halfway: a cancelled caller left the write lock
@@ -447,7 +461,9 @@ class FroniusWebControl:
         cancelled caller's task is taken here: left to the loop, its error
         went to the log with the URL in its cause.
         """
-        job = self._hass.async_create_task(func(*args), eager_start=False)
+        job: asyncio.Task[Any] = self._hass.async_create_task(
+            func(*args), eager_start=False
+        )
         cancelled: asyncio.CancelledError | None = None
         while not job.done():
             try:
@@ -468,7 +484,9 @@ class FroniusWebControl:
             )
         raise cancelled
 
-    async def _async_client_job(self, method_name: str, *args, public: bool = False):
+    async def _async_client_job(
+        self, method_name: str, *args: Any, public: bool = False
+    ) -> Any:
         """Run one refresh step, re-reading the client: an auth failure clears it mid-refresh."""
         client = self._public_client if public else self._client
         if client is None:
@@ -554,7 +572,11 @@ class FroniusWebControl:
             API_BATTERY_MODE.get(effective_mode) if effective_mode is not None else None
         )
         self.data.soc_mode_raw = raw_soc_mode
-        self.data.soc_mode = API_SOC_MODE.get(raw_soc_mode, raw_soc_mode)
+        self.data.soc_mode = (
+            None
+            if raw_soc_mode is None
+            else API_SOC_MODE.get(raw_soc_mode, raw_soc_mode)
+        )
 
     async def async_refresh(self) -> WebData:
         """Poll the web API and return a snapshot of the resulting state.

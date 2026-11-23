@@ -51,7 +51,8 @@ LINE_BUDGETS = {
     # 1560 - the MPPT module sensors, now mppt_entities.py
     # 1562 + the energy output sensors, whose rows are energy_output_entities.py
     # 1570 + the storage mode select waits for readable registers
-    "entities.py": 1570,
+    # 1575 + the meter spec type (strict mypy).
+    "entities.py": 1575,
     # 916 + a reserve without the web login is refused instead of reaching
     # Modbus alone; the check sits in the write lock, next to the other one.
     # 932 + a cancelled write waits for its thread before it leaves the
@@ -59,7 +60,8 @@ LINE_BUDGETS = {
     # 960 + a reserve waits for the SoC mode, a cancelled caller drops its
     # ticket, and its thread's outcome is taken instead of left to the loop.
     # 964 + a login refused after the caller was cancelled asks to log in.
-    "web_control.py": 964,
+    # 986 + the write decorators typed with ParamSpec (strict mypy).
+    "web_control.py": 986,
     # 1060 + the step that shows the address to allow before the restriction
     # is written, in all four flows; splitting the flows is a follow-up.
     # 1070 + the address step refuses addresses no client has, keeps a
@@ -72,10 +74,12 @@ LINE_BUDGETS = {
     # 1138 + the serial number as unique id, the host check that no longer
     # reads the host from it, and the split of data and options (1.5).
     # 1144 + the Modbus write runs shielded: a closed dialog must not cut it.
-    "config_flow.py": 1144,
+    # 1218 + every flow step and helper fully typed (strict mypy).
+    "config_flow.py": 1218,
     # 908: the split of data and options and the login flag kept in the data
     # (1.5); the migration steps belong together.
-    "migrations.py": 908,
+    # 924 + typed signatures, and a stored issue without severity is dropped (strict mypy).
+    "migrations.py": 924,
 }
 
 # SonarSource's own default. Above it, a function is one somebody has to

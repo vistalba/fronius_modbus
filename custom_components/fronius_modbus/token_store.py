@@ -37,14 +37,18 @@ class FroniusTokenStore:
         )
         self._cache: dict[str, dict[str, str]] | None = None
 
+    def _loaded_meanwhile(self) -> dict[str, dict[str, str]] | None:
+        """The cache as it is now: another load may have filled it during an await."""
+        return self._cache
+
     async def _async_load_all(self) -> dict[str, dict[str, str]]:
         if self._cache is not None:
             return self._cache
         loaded = await self._store.async_load()
-        if self._cache is not None:
+        if (cache := self._loaded_meanwhile()) is not None:
             # Another caller awaited the same load and resumed first; a second
             # dictionary replaced the first and lost the token saved into it.
-            return self._cache
+            return cache
         self._cache = loaded if isinstance(loaded, dict) else {}
         if self._cache:
             # Only a write applies the private mode; a file from an older
@@ -127,7 +131,7 @@ async def async_forget_unused_tokens(hass: HomeAssistant, host: str) -> None:
 
 def async_get_token_store(hass: HomeAssistant) -> FroniusTokenStore:
     domain_data = hass.data.setdefault(DOMAIN, {})
-    token_store = domain_data.get(_TOKEN_STORE_DATA_KEY)
+    token_store: FroniusTokenStore | None = domain_data.get(_TOKEN_STORE_DATA_KEY)
     if token_store is None:
         token_store = FroniusTokenStore(hass)
         domain_data[_TOKEN_STORE_DATA_KEY] = token_store
