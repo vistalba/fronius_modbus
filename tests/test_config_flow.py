@@ -1,6 +1,7 @@
 """The config flow, with the web client stubbed and Modbus served by the mock connection."""
 
 import asyncio
+import contextlib
 from ipaddress import ip_address
 import json
 from types import SimpleNamespace
@@ -19,12 +20,12 @@ from custom_components.fronius_modbus.const import (
 )
 from custom_components.fronius_modbus.discovery import async_serial_at
 from custom_components.fronius_modbus.fronius_modbus_api.device import DeviceIdentity
-from custom_components.fronius_modbus.froniuswebclient import (
-    FroniusWebResponseError,
+from custom_components.fronius_modbus.froniuswebclient import FroniusWebResponseError
+from custom_components.fronius_modbus.token_store import async_get_token_store
+from custom_components.fronius_modbus.web_errors import (
+    ClientIpResolutionError,
     FroniusWebUnreachable,
 )
-from custom_components.fronius_modbus.token_store import async_get_token_store
-from custom_components.fronius_modbus.web_errors import ClientIpResolutionError
 from homeassistant.config_entries import (
     SOURCE_IGNORE,
     ConfigEntryDisabler,
@@ -34,7 +35,7 @@ from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .conftest import INVERTER_UNIT_ID
+from .conftest import INVERTER_UNIT_ID, awaitable
 from .ha_test_plugin import MockConfigEntry
 
 HOST = "192.0.2.10"
@@ -64,20 +65,30 @@ def _custom_integration(enable_custom_integrations):
 @pytest.fixture(autouse=True)
 def _stub_web_client(monkeypatch):
     """The web API is not what this flow test is about: login and token minting succeed."""
-    monkeypatch.setattr(config_flow.FroniusWebClient, "login", lambda self: True)
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "ensure_modbus_enabled", lambda self, *a: True
+        config_flow.FroniusWebClient, "login", awaitable(lambda self: True)
     )
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "resolve_client_ip", lambda self: RESOLVED_IP
+        config_flow.FroniusWebClient,
+        "ensure_modbus_enabled",
+        awaitable(lambda self, *a: True),
     )
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "restriction_allows", lambda self, address: False
+        config_flow.FroniusWebClient,
+        "resolve_client_ip",
+        awaitable(lambda self: RESOLVED_IP),
+    )
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient,
+        "restriction_allows",
+        awaitable(lambda self, address: False),
     )
     monkeypatch.setattr(
         config_flow,
         "mint_token",
-        lambda host, user, password: {"realm": "r", "token": "t"},
+        awaitable(
+            lambda host, user, password, **_session: {"realm": "r", "token": "t"}
+        ),
     )
 
     # A created entry is set up right away; that path is what test_e2e covers, and
@@ -201,7 +212,9 @@ async def test_a_web_server_error_during_setup_shows_cannot_connect(
     def refuse(self, *_args):
         raise FroniusWebResponseError("HTTP 500 on /api/config/modbus", 500)
 
-    monkeypatch.setattr(config_flow.FroniusWebClient, "ensure_modbus_enabled", refuse)
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient, "ensure_modbus_enabled", awaitable(refuse)
+    )
 
     result = await run_flow(hass)
 
@@ -217,8 +230,10 @@ async def test_the_technician_role_mints_and_stores_a_technician_token(
     monkeypatch.setattr(
         config_flow,
         "mint_token",
-        lambda host, user, password: (
-            minted.append(user) or {"realm": "r", "token": "t"}
+        awaitable(
+            lambda host, user, password, **_session: (
+                minted.append(user) or {"realm": "r", "token": "t"}
+            )
         ),
     )
     result = await hass.config_entries.flow.async_init(
@@ -547,7 +562,7 @@ def _record_modbus_setup(monkeypatch) -> list[tuple]:
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: applied.append(args) or True,
+        awaitable(lambda self, *args: applied.append(args) or True),
     )
     return applied
 
@@ -558,13 +573,15 @@ def _record_contact(monkeypatch) -> list[str]:
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "login",
-        lambda self: contacted.append("login") or True,
+        awaitable(lambda self: contacted.append("login") or True),
     )
     monkeypatch.setattr(
         config_flow,
         "mint_token",
-        lambda host, user, password: (
-            contacted.append("mint") or {"realm": "r", "token": "t"}
+        awaitable(
+            lambda host, user, password, **_session: (
+                contacted.append("mint") or {"realm": "r", "token": "t"}
+            )
         ),
     )
     return contacted
@@ -803,12 +820,14 @@ async def test_an_entry_without_the_web_api_needs_no_password(
     """Setup without a web login: no password step, no token, no settings write."""
     contacts: list[str] = []
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "login", lambda self: contacts.append("login")
+        config_flow.FroniusWebClient,
+        "login",
+        awaitable(lambda self: contacts.append("login")),
     )
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *a: contacts.append("modbus"),
+        awaitable(lambda self, *a: contacts.append("modbus")),
     )
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
@@ -857,7 +876,7 @@ async def test_turning_the_web_api_on_applies_the_saved_restriction(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -1516,7 +1535,9 @@ def _float_map(monkeypatch) -> list[tuple]:
         applied.append(args)
         return True
 
-    monkeypatch.setattr(config_flow.FroniusWebClient, "ensure_modbus_enabled", ensure)
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient, "ensure_modbus_enabled", awaitable(ensure)
+    )
     return applied
 
 
@@ -1838,7 +1859,7 @@ async def test_the_address_to_allow_is_shown_and_can_be_changed(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
@@ -1866,7 +1887,7 @@ async def test_an_address_to_allow_that_is_no_address_is_refused(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
@@ -1895,12 +1916,12 @@ async def test_an_address_the_inverter_already_allows_is_not_asked_again(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "restriction_allows",
-        lambda self, address: address == RESOLVED_IP,
+        awaitable(lambda self, address: address == RESOLVED_IP),
     )
     monkeypatch.setattr(
         hass.config_entries, "async_reload", AsyncMock(return_value=True)
@@ -1928,12 +1949,12 @@ def _restricted_entry_the_list_allows(hass, monkeypatch) -> tuple:
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "restriction_allows",
-        lambda self, address: address == RESOLVED_IP,
+        awaitable(lambda self, address: address == RESOLVED_IP),
     )
     monkeypatch.setattr(
         hass.config_entries, "async_reload", AsyncMock(return_value=True)
@@ -2056,7 +2077,7 @@ async def test_the_model_type_answer_writes_the_address_the_list_allowed(
         return len(checks) == 1
 
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "restriction_allows", allowed_once
+        config_flow.FroniusWebClient, "restriction_allows", awaitable(allowed_once)
     )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
@@ -2089,7 +2110,7 @@ async def test_an_address_no_client_can_have_is_refused(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
@@ -2118,7 +2139,9 @@ async def test_a_corrected_address_stays_when_the_step_is_shown_again(
         return True
 
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "ensure_modbus_enabled", unreachable_once
+        config_flow.FroniusWebClient,
+        "ensure_modbus_enabled",
+        awaitable(unreachable_once),
     )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
@@ -2141,13 +2164,15 @@ async def test_an_address_that_cannot_be_resolved_is_asked_for(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: written.append(args),
+        awaitable(lambda self, *args: written.append(args)),
     )
 
     def unresolvable(self):
         raise ClientIpResolutionError("no local address")
 
-    monkeypatch.setattr(config_flow.FroniusWebClient, "resolve_client_ip", unresolvable)
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient, "resolve_client_ip", awaitable(unresolvable)
+    )
     result = await _password_step(hass, restriction="home_assistant")
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"api_password": "secret"}
@@ -2189,10 +2214,10 @@ async def test_the_address_and_the_model_type_are_both_asked_before_writing(
 async def test_a_token_request_that_fails_shows_cannot_connect(
     hass, mock_modbus, monkeypatch
 ):
-    def fail(host, user, password):
+    def fail(host, user, password, **_session):
         raise OSError("no answer")
 
-    monkeypatch.setattr(config_flow, "mint_token", fail)
+    monkeypatch.setattr(config_flow, "mint_token", awaitable(fail))
     result = await _password_step(hass)
 
     result = await hass.config_entries.flow.async_configure(
@@ -2203,7 +2228,11 @@ async def test_a_token_request_that_fails_shows_cannot_connect(
 
 
 async def test_a_refused_password_asks_for_it_again(hass, mock_modbus, monkeypatch):
-    monkeypatch.setattr(config_flow, "mint_token", lambda host, user, password: None)
+    monkeypatch.setattr(
+        config_flow,
+        "mint_token",
+        awaitable(lambda host, user, password, **_session: None),
+    )
     result = await _password_step(hass)
 
     result = await hass.config_entries.flow.async_configure(
@@ -2218,7 +2247,9 @@ async def test_a_stored_token_the_inverter_refuses_asks_for_the_password(
     hass, mock_modbus, monkeypatch
 ):
     await async_get_token_store(hass).async_save_token(HOST, realm="r", token="old")
-    monkeypatch.setattr(config_flow.FroniusWebClient, "login", lambda self: False)
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient, "login", awaitable(lambda self: False)
+    )
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
@@ -2267,7 +2298,7 @@ async def test_an_entry_set_to_leave_modbus_alone_is_not_set_up_on_reauth(
     monkeypatch.setattr(
         config_flow.FroniusWebClient,
         "ensure_modbus_enabled",
-        lambda self, *args: calls.append(args),
+        awaitable(lambda self, *args: calls.append(args)),
     )
     monkeypatch.setattr(
         hass.config_entries, "async_reload", AsyncMock(return_value=True)
@@ -2502,3 +2533,51 @@ async def test_configure_keeps_the_connection_in_the_data_and_the_intervals_in_t
     assert entry.data["host"] == HOST
     assert entry.data["api_username"] == "customer"
     assert "scan_interval" not in entry.data
+
+
+async def test_a_dialog_closed_during_the_modbus_write_does_not_cut_it_short(
+    hass, monkeypatch
+):
+    """The write ran in an executor thread nothing could stop; as a coroutine a
+    closed dialog would stop it between its read and its post."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    written = []
+
+    async def slow_write(self, *args):
+        started.set()
+        await release.wait()
+        written.append(args)
+        return True
+
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient, "ensure_modbus_enabled", slow_write
+    )
+    data = {
+        "host": HOST,
+        "port": 502,
+        "inverter_modbus_unit_id": INVERTER_UNIT_ID,
+        "api_username": "customer",
+        "auto_enable_modbus": True,
+        "modbus_restriction": "keep",
+    }
+    flow = asyncio.ensure_future(
+        config_flow._async_prepare_web_api(
+            hass,
+            data,
+            {"realm": "r", "token": "t"},
+            True,
+            None,
+            False,
+            None,
+            ask_allowed_host=False,
+        )
+    )
+    await started.wait()
+    flow.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await flow
+    release.set()
+    await hass.async_block_till_done()
+
+    assert written == [(502, 200, INVERTER_UNIT_ID, "keep", False, None)]

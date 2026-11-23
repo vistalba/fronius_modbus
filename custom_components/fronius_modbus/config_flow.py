@@ -84,12 +84,13 @@ from .flow_state import (
 )
 from .fronius_modbus_api.device import FroniusInverter
 from .fronius_modbus_api.exceptions import error_text
+from .web_session import async_web_session
+from .web_transport import mint_token
 from .froniuswebclient import (
     ClientIpResolutionError,
     FroniusWebClient,
     FroniusWebResponseError,
     SunSpecModeChangeNeeded,
-    mint_token,
 )
 from .token_store import (
     async_forget_unused_tokens,
@@ -202,11 +203,8 @@ async def _async_mint_token(
         raise _MissingApiPassword
 
     try:
-        token = await hass.async_add_executor_job(
-            mint_token,
-            host,
-            username,
-            password,
+        token = await mint_token(
+            host, username, password, session=async_web_session(hass)
         )
     except Exception as err:
         raise _CannotConnect from err
@@ -226,7 +224,7 @@ async def _async_address_to_allow(
     Modbus control out.
     """
     try:
-        resolved_ip = await hass.async_add_executor_job(client.resolve_client_ip)
+        resolved_ip = await client.resolve_client_ip()
     except ClientIpResolutionError:
         # The owner can still type the address the inverter sees.
         resolved_ip = ""
@@ -234,7 +232,7 @@ async def _async_address_to_allow(
         raise _AllowedHostNeeded(resolved_ip)
     # Asked only when the write would change the list: Reconfigure and
     # reauthentication apply the settings every time.
-    if not await hass.async_add_executor_job(client.restriction_allows, resolved_ip):
+    if not await client.restriction_allows(resolved_ip):
         raise _AllowedHostNeeded(resolved_ip)
     return resolved_ip
 
@@ -261,8 +259,9 @@ async def _async_prepare_web_api(
         username=data[CONF_API_USERNAME],
         password="",
         token=api_token,
+        session=async_web_session(hass),
     )
-    if not await hass.async_add_executor_job(client.login):
+    if not await client.login():
         raise _InvalidApiCredentials
     enable_modbus = data.get(CONF_AUTO_ENABLE_MODBUS, DEFAULT_AUTO_ENABLE_MODBUS)
     if not (apply_modbus_config and enable_modbus):
@@ -272,16 +271,23 @@ async def _async_prepare_web_api(
         allowed_host = await _async_address_to_allow(hass, client, ask=ask_allowed_host)
     if claim_host is not None:
         await claim_host()
-    try:
-        await hass.async_add_executor_job(
-            client.ensure_modbus_enabled,
+    # Shielded: a closed dialog must not cut the read-then-write in two, as
+    # the executor thread it ran in before could not be cut either.
+    write = hass.async_create_task(
+        client.ensure_modbus_enabled(
             data[CONF_PORT],
             DEFAULT_METER_UNIT_ID,
             data[CONF_INVERTER_UNIT_ID],
             data[CONF_MODBUS_RESTRICTION],
             switch_sunspec_mode,
             allowed_host,
-        )
+        ),
+        eager_start=False,
+    )
+    # Taken even when the flow is gone: its error names the inverter's URL.
+    write.add_done_callback(lambda task: task.cancelled() or task.exception())
+    try:
+        await asyncio.shield(write)
     except SunSpecModeChangeNeeded as err:
         raise _SunSpecSwitchNeeded(err.current_mode, allowed_host) from err
     # The inverter restarts its Modbus server after the settings write.

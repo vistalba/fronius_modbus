@@ -42,7 +42,7 @@ GUARD_FILES = {
     "test_upgrade_contract.py": "an entry of 1.4.1 keeps every entity, device and setting",
     "test_api_is_ha_free.py": "the device library imports no Home Assistant",
     "test_deprecated_constants.py": "no Home Assistant constant with an announced removal is used",
-    "test_log_hygiene.py": "no log line names the device, requests is called once, an outage is not an error",
+    "test_log_hygiene.py": "no log line names the device, aiohttp is reached in one place, an outage is not an error",
     "test_mutation_harness.py": "the mutation run fails loudly instead of reporting success",
     "test_mypy_scope.py": "every module is type-checked or says why it is not yet",
     "test_platform_entities.py": "every platform builds its entities through the shared helper",

@@ -10,7 +10,7 @@ class ClientIpResolutionError(RuntimeError):
 class FroniusWebUnreachable(OSError):
     """No answer from the web server: the same switched-off device as on Modbus.
 
-    Carries the requests error type only. Requests puts the URL, and with it
+    Carries the aiohttp error type only. aiohttp puts the URL, and with it
     the host, into its messages, and Home Assistant logs travel with bug
     reports.
     """

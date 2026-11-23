@@ -10,10 +10,10 @@ import logging
 import socket
 from urllib.parse import parse_qs, urlparse
 
+import aiohttp
 import pytest
-import requests
 
-from custom_components.fronius_modbus import froniuswebclient
+from custom_components.fronius_modbus import froniuswebclient, web_transport
 from custom_components.fronius_modbus.const import ModbusRestriction
 from custom_components.fronius_modbus.fronius_modbus_api.exceptions import (
     ControlRefused,
@@ -23,15 +23,20 @@ from custom_components.fronius_modbus.froniuswebclient import (
     FroniusWebAuthError,
     FroniusWebClient,
     FroniusWebResponseError,
-    FroniusWebUnreachable,
-    XHeaderDigestAuth,
     _parse_inverter_readable,
     _parse_power_meter_info,
     _parse_storage_readable,
+)
+from custom_components.fronius_modbus.meter_topology import parse_meter_topology
+from custom_components.fronius_modbus.web_errors import FroniusWebUnreachable
+from custom_components.fronius_modbus.web_transport import (
+    WebResponse,
+    XHeaderDigestAuth,
     login,
     mint_token,
 )
-from custom_components.fronius_modbus.meter_topology import parse_meter_topology
+
+from .conftest import awaitable
 
 HOST = "192.0.2.10"
 REALM = "Webinterface area"
@@ -59,10 +64,10 @@ class FakeInverter:
 
     def handle(self, method: str, path: str, payload: dict | None, headers) -> tuple:
         if path == "/api/status/common" and self.common is not None:
-            return 200, self.common, {}
+            return self.statuses.get(path, 200), self.common, {}
         if path == "/api/status/common":
             return (
-                200,
+                self.statuses.get(path, 200),
                 {
                     "authenticationOptions": {
                         "digest": {"customerHashingVersion": self.hashing_version}
@@ -96,32 +101,23 @@ class FakeInverter:
 @pytest.fixture(autouse=True)
 def _no_cached_hash_mode():
     """The hash mode is memoized per host; a fresh inverter must not inherit it."""
-    froniuswebclient._HASH_MODES.clear()
+    web_transport._HASH_MODES.clear()
     yield
-    froniuswebclient._HASH_MODES.clear()
+    web_transport._HASH_MODES.clear()
 
 
 @pytest.fixture
 def inverter(monkeypatch) -> FakeInverter:
     fake = FakeInverter()
 
-    def send(adapter, request, **_kwargs):
-        parsed = urlparse(request.url)
-        payload = json.loads(request.body) if request.body else None
-        status, body, headers = fake.handle(
-            request.method.lower(), parsed.path, payload, request.headers
+    async def exchange(_session, method, url, *, payload, headers, timeout):
+        del timeout
+        status, body, response_headers = fake.handle(
+            method.lower(), urlparse(url).path, payload, headers
         )
-        response = requests.Response()
-        response.status_code = status
-        response.url = request.url
-        response.request = request
-        response.connection = adapter
-        response.headers.update(headers)
-        response._content = json.dumps(body).encode()
-        response._content_consumed = True
-        return response
+        return WebResponse(status, response_headers, json.dumps(body).encode(), url)
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    monkeypatch.setattr(web_transport, "_exchange", exchange)
     return fake
 
 
@@ -134,7 +130,7 @@ def client(inverter) -> FroniusWebClient:
 
 
 def test_the_digest_challenge_is_parsed_without_its_scheme_prefix():
-    challenge = froniuswebclient._digest_challenge(
+    challenge = web_transport._digest_challenge(
         'Digest realm="r", nonce="n", qop="auth"'
     )
 
@@ -142,13 +138,15 @@ def test_the_digest_challenge_is_parsed_without_its_scheme_prefix():
 
 
 def test_an_empty_challenge_header_parses_to_nothing():
-    assert froniuswebclient._digest_challenge("") == {}
+    assert web_transport._digest_challenge("") == {}
 
 
-def test_a_protected_request_is_retried_once_with_a_digest_header(client, inverter):
+async def test_a_protected_request_is_retried_once_with_a_digest_header(
+    client, inverter
+):
     inverter.bodies["/api/config/modbus"] = {"slave": {"mode": "tcp"}}
 
-    assert client.get_modbus_config() == {"slave": {"mode": "tcp"}}
+    assert (await client.get_modbus_config()) == {"slave": {"mode": "tcp"}}
 
     header = inverter.authorized_calls[-1]
     assert header.startswith("Digest ")
@@ -157,91 +155,105 @@ def test_a_protected_request_is_retried_once_with_a_digest_header(client, invert
     assert 'uri="/api/config/modbus"' in header
 
 
-def test_a_challenge_that_repeats_the_401_is_not_retried_again(client, inverter):
+async def test_a_challenge_that_repeats_the_401_is_not_retried_again(client, inverter):
     inverter.always_401 = True
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_modbus_config()
+        (await client.get_modbus_config())
 
     assert inverter.authorized_calls == []
 
 
-def test_a_401_without_a_challenge_is_reported_as_an_auth_failure(client, inverter):
+async def test_a_401_without_a_challenge_is_reported_as_an_auth_failure(
+    client, inverter
+):
     inverter.no_challenge = True
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_modbus_config()
+        (await client.get_modbus_config())
 
 
-def test_a_client_without_credentials_never_answers_a_challenge(inverter):
+async def test_a_client_without_credentials_never_answers_a_challenge(inverter):
     """A no-login entry sent an empty-password login on every poll."""
     client = FroniusWebClient(host=HOST, password="")
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_inverter_info()
+        (await client.get_inverter_info())
 
     assert inverter.login_attempts == []
 
 
-def test_a_rejected_login_is_not_tried_again(inverter):
+async def test_a_rejected_login_is_not_tried_again(inverter):
     """After a lost login the client kept retrying the rejected token."""
     inverter.always_401 = True
     client = FroniusWebClient(host=HOST, token={"realm": REALM, "token": "stale"})
 
     for _ in range(2):
         with pytest.raises(FroniusWebAuthError):
-            client.get_inverter_info()
+            (await client.get_inverter_info())
 
     assert inverter.login_attempts == ["/api/components/inverter/readable"]
 
 
-def test_the_hash_mode_follows_the_version_the_inverter_reports(inverter):
+async def test_the_hash_mode_follows_the_version_the_inverter_reports(inverter):
     inverter.hashing_version = 1
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "md5"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "md5"
 
-    froniuswebclient._HASH_MODES.clear()
+    web_transport._HASH_MODES.clear()
     inverter.hashing_version = 2
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "sha256"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "sha256"
 
 
-def test_a_refused_login_reads_the_hash_mode_again(inverter):
+async def test_a_refused_login_reads_the_hash_mode_again(inverter):
     """A remembered mode outlived a device that changed it, until a restart."""
     inverter.hashing_version = 1
     inverter.always_401 = True
-    assert not froniuswebclient.login(HOST, "customer", password="secret")
+    assert not (await web_transport.login(HOST, "customer", password="secret"))
 
     inverter.hashing_version = 2
 
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "sha256"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "sha256"
 
 
-def test_an_unreadable_status_page_falls_back_to_sha256(monkeypatch):
-    def refuse(*_args, **_kwargs):
-        raise requests.ConnectionError
+async def test_an_unreadable_status_page_falls_back_to_sha256(monkeypatch):
+    async def refuse(*_args, **_kwargs):
+        raise aiohttp.ClientConnectionError
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+    monkeypatch.setattr(web_transport, "_exchange", refuse)
 
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "sha256"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "sha256"
 
 
-def test_a_timed_out_status_page_is_not_remembered_as_the_hash_mode(
+async def test_a_timed_out_status_page_is_not_remembered_as_the_hash_mode(
     inverter, monkeypatch
 ):
     """The sha256 fallback was cached, so md5 devices never logged in again."""
     inverter.hashing_version = 1
-    answered = requests.adapters.HTTPAdapter.send
+    answered = web_transport._exchange
     attempts = []
 
-    def refuse_once(*args, **kwargs):
+    async def refuse_once(*args, **kwargs):
         attempts.append(1)
         if len(attempts) == 1:
-            raise requests.ConnectionError
-        return answered(*args, **kwargs)
+            raise aiohttp.ClientConnectionError
+        return await answered(*args, **kwargs)
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse_once)
+    monkeypatch.setattr(web_transport, "_exchange", refuse_once)
 
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "sha256"
-    assert froniuswebclient._hash_mode(f"http://{HOST}", "customer", 4.0) == "md5"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "sha256"
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+    ) == "md5"
 
 
 @pytest.mark.parametrize(
@@ -249,22 +261,22 @@ def test_a_timed_out_status_page_is_not_remembered_as_the_hash_mode(
     [{"authenticationOptions": None}, {"authenticationOptions": {"digest": None}}, []],
     ids=["options-null", "digest-null", "list"],
 )
-def test_a_status_page_of_another_shape_falls_back_to_sha256(inverter, common):
+async def test_a_status_page_of_another_shape_falls_back_to_sha256(inverter, common):
     """Its AttributeError broke every request, the public reads of a no-login entry too."""
     inverter.common = common
     client = FroniusWebClient(host=HOST, password="secret")
 
-    client.get_battery_config()
+    (await client.get_battery_config())
 
     assert inverter.calls[-1][1] == "/api/config/batteries"
 
 
-def test_a_challenge_without_qop_is_a_refused_login(client, inverter):
+async def test_a_challenge_without_qop_is_a_refused_login(client, inverter):
     """Its KeyError escaped the response hook instead of reading as an auth failure."""
     inverter.challenge = f'Digest realm="{REALM}", nonce="{inverter.nonce}"'
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_battery_config()
+        (await client.get_battery_config())
 
 
 @pytest.mark.parametrize(
@@ -276,14 +288,14 @@ def test_a_challenge_without_qop_is_a_refused_login(client, inverter):
     ],
     ids=["qop-without-value", "nonce-without-value", "realm-without-value"],
 )
-def test_a_challenge_with_a_valueless_part_is_a_refused_login(
+async def test_a_challenge_with_a_valueless_part_is_a_refused_login(
     client, inverter, challenge
 ):
     """Only the keys were checked; a key without a value raised an AttributeError."""
     inverter.challenge = challenge
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_battery_config()
+        (await client.get_battery_config())
 
 
 def test_the_nonce_count_rises_while_the_nonce_stays_the_same():
@@ -316,23 +328,23 @@ def test_the_login_uri_drops_the_query_the_other_paths_keep():
     )
 
 
-def test_login_succeeds_and_mints_a_token_for_the_realm(inverter):
-    assert login(HOST, "customer", password="secret") is True
-    assert mint_token(HOST, "customer", "secret") == {
+async def test_login_succeeds_and_mints_a_token_for_the_realm(inverter):
+    assert (await login(HOST, "customer", password="secret")) is True
+    assert (await mint_token(HOST, "customer", "secret")) == {
         "realm": REALM,
         "token": XHeaderDigestAuth("customer", password="secret")._secret(REALM),
     }
 
 
-def test_login_fails_when_the_inverter_keeps_refusing(inverter):
+async def test_login_fails_when_the_inverter_keeps_refusing(inverter):
     inverter.always_401 = True
 
-    assert login(HOST, "customer", password="secret") is False
-    assert mint_token(HOST, "customer", "secret") is None
+    assert (await login(HOST, "customer", password="secret")) is False
+    assert (await mint_token(HOST, "customer", "secret")) is None
 
 
-def test_the_client_reports_the_token_its_login_minted(client):
-    assert client.login() is True
+async def test_the_client_reports_the_token_its_login_minted(client):
+    assert (await client.login()) is True
 
 
 # -- payload parsing ---------------------------------------------------------------
@@ -527,30 +539,34 @@ def test_an_inverter_payload_without_channels_has_no_temperature():
 # -- the read endpoints ------------------------------------------------------------
 
 
-def test_the_power_meter_endpoint_is_read_without_authentication(client, inverter):
+async def test_the_power_meter_endpoint_is_read_without_authentication(
+    client, inverter
+):
     inverter.bodies["/api/components/PowerMeter/readable"] = {
         "Body": {"Data": {"1": meter_node("1")}}
     }
 
-    assert client.get_power_meter_info()["unit_ids"] == [200]
+    assert (await client.get_power_meter_info())["unit_ids"] == [200]
     assert inverter.authorized_calls == []
 
 
-def test_a_failing_power_meter_read_is_reported_as_no_information(client, inverter):
+async def test_a_failing_power_meter_read_is_reported_as_no_information(
+    client, inverter
+):
     inverter.statuses["/api/components/PowerMeter/readable"] = 500
 
-    assert client.get_power_meter_info() is None
+    assert (await client.get_power_meter_info()) is None
 
 
-def test_an_unparsable_power_meter_payload_is_reported_as_no_information(
+async def test_an_unparsable_power_meter_payload_is_reported_as_no_information(
     client, inverter
 ):
     inverter.bodies["/api/components/PowerMeter/readable"] = {"unexpected": {}}
 
-    assert client.get_power_meter_info() is None
+    assert (await client.get_power_meter_info()) is None
 
 
-def test_the_storage_and_inverter_identities_come_from_the_readable_endpoints(
+async def test_the_storage_and_inverter_identities_come_from_the_readable_endpoints(
     client, inverter
 ):
     inverter.bodies["/api/components/BatteryManagementSystem/readable"] = {
@@ -562,18 +578,20 @@ def test_the_storage_and_inverter_identities_come_from_the_readable_endpoints(
         }
     }
 
-    assert client.get_storage_info()["model"] == "HVS"
-    assert client.get_inverter_info()["readings"] == {
+    assert (await client.get_storage_info())["model"] == "HVS"
+    assert (await client.get_inverter_info())["readings"] == {
         "DEVICE_TEMPERATURE_AMBIENTMEAN_01_F32": 40.0
     }
 
 
-def test_a_failing_readable_endpoint_falls_back_to_the_empty_identity(client, inverter):
+async def test_a_failing_readable_endpoint_falls_back_to_the_empty_identity(
+    client, inverter
+):
     inverter.statuses["/api/components/BatteryManagementSystem/readable"] = 500
     inverter.statuses["/api/components/inverter/readable"] = 500
 
-    assert client.get_storage_info()["model"] == "Battery Storage"
-    assert client.get_inverter_info()["readings"] is None
+    assert (await client.get_storage_info())["model"] == "Battery Storage"
+    assert (await client.get_inverter_info())["readings"] is None
 
 
 READABLE_PATHS = (
@@ -587,93 +605,97 @@ def warnings(caplog) -> list[str]:
 
 
 @pytest.mark.parametrize(("read", "path"), READABLE_PATHS)
-def test_a_failing_readable_endpoint_is_warned_about_once(
+async def test_a_failing_readable_endpoint_is_warned_about_once(
     client, inverter, caplog, read, path
 ):
     """Its values stay unknown, but not silently: that hid a server error."""
     inverter.statuses[path] = 500
 
     with caplog.at_level(logging.DEBUG):
-        getattr(client, read)()
-        getattr(client, read)()
+        (await getattr(client, read)())
+        (await getattr(client, read)())
         assert len(warnings(caplog)) == 1
         assert path in warnings(caplog)[0]
 
         caplog.clear()
         inverter.statuses[path] = 200
-        getattr(client, read)()
+        (await getattr(client, read)())
     assert [r.levelno for r in caplog.records if path in r.getMessage()] == [
         logging.INFO
     ]
 
 
 @pytest.mark.parametrize(("read", "path"), READABLE_PATHS)
-def test_firmware_without_a_readable_endpoint_is_not_a_warning(
+async def test_firmware_without_a_readable_endpoint_is_not_a_warning(
     client, inverter, caplog, read, path
 ):
     inverter.statuses[path] = 404
 
-    getattr(client, read)()
+    (await getattr(client, read)())
 
     assert warnings(caplog) == []
 
 
 @pytest.mark.parametrize(("read", "path"), READABLE_PATHS)
 @pytest.mark.parametrize(("status", "missing"), [(404, True), (500, False)])
-def test_only_a_404_marks_a_component_endpoint_missing(
+async def test_only_a_404_marks_a_component_endpoint_missing(
     client, inverter, read, path, status, missing
 ):
     """A 404 is firmware without the endpoint; a 500 is a read that failed this time."""
     inverter.statuses[path] = status
 
-    info = getattr(client, read)()
+    info = await getattr(client, read)()
 
     assert (info["readings"], info["missing"]) == (None, missing)
 
 
 @pytest.mark.parametrize(("read", "path"), READABLE_PATHS)
-def test_a_switched_off_inverter_is_left_to_the_refresh(
+async def test_a_switched_off_inverter_is_left_to_the_refresh(
     client, monkeypatch, read, path
 ):
     """The coordinator logs an outage once; the readable read must not add its own."""
 
-    def refuse(adapter, request, **_kwargs):
-        raise requests.ConnectionError("refused")
+    async def refuse(_session, _method, url, **_kwargs):
+        raise aiohttp.ClientConnectionError("refused")
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+    monkeypatch.setattr(web_transport, "_exchange", refuse)
     with pytest.raises(FroniusWebUnreachable):
-        getattr(client, read)()
+        (await getattr(client, read)())
 
 
-def test_an_auth_failure_on_a_readable_endpoint_is_not_swallowed(client, inverter):
+async def test_an_auth_failure_on_a_readable_endpoint_is_not_swallowed(
+    client, inverter
+):
     inverter.always_401 = True
 
     with pytest.raises(FroniusWebAuthError):
-        client.get_storage_info()
+        (await client.get_storage_info())
     with pytest.raises(FroniusWebAuthError):
-        client.get_inverter_info()
+        (await client.get_inverter_info())
 
 
-def test_the_battery_and_solar_api_configs_are_read_from_their_paths(client, inverter):
+async def test_the_battery_and_solar_api_configs_are_read_from_their_paths(
+    client, inverter
+):
     inverter.bodies["/api/config/batteries"] = {"HYB_EM_MODE": 1}
     inverter.bodies["/api/config/solar_api"] = {"SolarAPIv1Enabled": True}
 
-    assert client.get_battery_config() == {"HYB_EM_MODE": 1}
-    assert client.get_solar_api_config() == {"SolarAPIv1Enabled": True}
+    assert (await client.get_battery_config()) == {"HYB_EM_MODE": 1}
+    assert (await client.get_solar_api_config()) == {"SolarAPIv1Enabled": True}
 
 
-def test_an_unavailable_export_limit_config_reads_as_empty(client, inverter):
+async def test_an_unavailable_export_limit_config_reads_as_empty(client, inverter):
     inverter.statuses["/api/config/limit_settings/powerLimits"] = 404
 
-    assert client.get_export_limit_config() == {}
+    assert (await client.get_export_limit_config()) == {}
 
 
-def test_a_failing_export_limit_endpoint_is_not_an_empty_config(client, inverter):
+async def test_a_failing_export_limit_endpoint_is_not_an_empty_config(client, inverter):
     """An HTTP 500 read as "no export limit" and the refresh succeeded."""
     inverter.statuses["/api/config/limit_settings/powerLimits"] = 500
 
     with pytest.raises(FroniusWebResponseError):
-        client.get_export_limit_config()
+        (await client.get_export_limit_config())
 
 
 # -- enabling Modbus ---------------------------------------------------------------
@@ -693,19 +715,19 @@ def modbus_config(**slave) -> dict:
     }
 
 
-def test_modbus_that_already_matches_is_not_written_again(client, inverter):
+async def test_modbus_that_already_matches_is_not_written_again(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config()
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is False
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is False
     assert [call for call in inverter.calls if call[0] == "post"] == []
 
 
-def test_disabled_modbus_is_switched_on_with_one_write(client, inverter):
+async def test_disabled_modbus_is_switched_on_with_one_write(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config(
         ctr={"on": False, "restriction": {"on": False}}
     )
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
     writes = [call for call in inverter.calls if call[0] == "post"]
     assert len(writes) == 1
@@ -715,10 +737,10 @@ def test_disabled_modbus_is_switched_on_with_one_write(client, inverter):
     assert writes[0][2]["master"] == froniuswebclient.MASTER_RTUIF["master"]
 
 
-def test_a_different_port_is_rewritten(client, inverter):
+async def test_a_different_port_is_rewritten(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config(port=1502)
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
 
 @pytest.mark.parametrize(
@@ -730,7 +752,7 @@ def test_a_different_port_is_rewritten(client, inverter):
     ],
     ids=["on-and-listed", "on-not-listed", "off"],
 )
-def test_the_restriction_says_whether_it_already_allows_an_address(
+async def test_the_restriction_says_whether_it_already_allows_an_address(
     client, inverter, restriction, allows
 ):
     """Only a restriction that is on and lists the address needs no write for it."""
@@ -738,22 +760,23 @@ def test_the_restriction_says_whether_it_already_allows_an_address(
         ctr={"on": True, "restriction": restriction}
     )
 
-    assert client.restriction_allows("192.0.2.99") is allows
+    assert (await client.restriction_allows("192.0.2.99")) is allows
     assert [call for call in inverter.calls if call[0] == "post"] == []
 
 
-def test_the_restriction_carries_the_resolved_client_ip(client, inverter, monkeypatch):
+async def test_the_restriction_carries_the_resolved_client_ip(
+    client, inverter, monkeypatch
+):
     inverter.bodies["/api/config/modbus"] = modbus_config()
     monkeypatch.setattr(
-        FroniusWebClient, "resolve_client_ip", lambda self: "192.0.2.99"
+        FroniusWebClient, "resolve_client_ip", awaitable(lambda self: "192.0.2.99")
     )
 
     assert (
-        client.ensure_modbus_enabled(
+        await client.ensure_modbus_enabled(
             502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
         )
-        is True
-    )
+    ) is True
 
     write = next(call for call in inverter.calls if call[0] == "post")
     assert write[2]["slave"]["ctr"]["restriction"] == {
@@ -765,43 +788,46 @@ def test_the_restriction_carries_the_resolved_client_ip(client, inverter, monkey
 PRE_RESTRICTED = {"on": True, "restriction": {"on": True, "ip": "192.0.2.50"}}
 
 
-def test_an_existing_restriction_is_not_lifted(client, inverter):
+async def test_an_existing_restriction_is_not_lifted(client, inverter):
     """Setup without the checkbox wrote restriction.on=false.
 
     A restricted Modbus server then answered every host on the network.
     """
     inverter.bodies["/api/config/modbus"] = modbus_config(ctr=PRE_RESTRICTED)
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is False
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is False
     assert [call for call in inverter.calls if call[0] == "post"] == []
 
 
-def test_a_rewrite_for_another_reason_keeps_the_restriction(client, inverter):
+async def test_a_rewrite_for_another_reason_keeps_the_restriction(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config(port=1502, ctr=PRE_RESTRICTED)
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
     write = next(call for call in inverter.calls if call[0] == "post")
     assert write[2]["slave"]["ctr"]["restriction"] == PRE_RESTRICTED["restriction"]
 
 
-def test_lifting_the_restriction_is_a_choice_of_its_own(client, inverter):
+async def test_lifting_the_restriction_is_a_choice_of_its_own(client, inverter):
     """Keeping is the default; "off" is written only when the owner picks it."""
     inverter.bodies["/api/config/modbus"] = modbus_config(ctr=PRE_RESTRICTED)
 
-    assert client.ensure_modbus_enabled(502, 200, 1, restriction=ModbusRestriction.OFF)
+    assert await client.ensure_modbus_enabled(
+        502, 200, 1, restriction=ModbusRestriction.OFF
+    )
 
     write = next(call for call in inverter.calls if call[0] == "post")
     assert write[2]["slave"]["ctr"]["restriction"]["on"] is False
 
 
-def test_a_lifted_restriction_is_not_lifted_again(client, inverter):
+async def test_a_lifted_restriction_is_not_lifted_again(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config()
 
     assert (
-        client.ensure_modbus_enabled(502, 200, 1, restriction=ModbusRestriction.OFF)
-        is False
-    )
+        await client.ensure_modbus_enabled(
+            502, 200, 1, restriction=ModbusRestriction.OFF
+        )
+    ) is False
 
 
 def modbus_config_as_read(**slave) -> dict:
@@ -819,11 +845,11 @@ def modbus_write(inverter) -> dict:
     return next(call for call in inverter.calls if call[0] == "post")[2]
 
 
-def test_enabling_tcp_keeps_an_rtu_port_in_slave_role(client, inverter):
+async def test_enabling_tcp_keeps_an_rtu_port_in_slave_role(client, inverter):
     """The fixed payload moved every RS485 port to master and cut off an RTU client."""
     inverter.bodies["/api/config/modbus"] = modbus_config_as_read(mode="rtu")
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
     write = modbus_write(inverter)
     assert write["master"] == {"rtuif": [{"if": "rtu0"}]}
@@ -831,32 +857,32 @@ def test_enabling_tcp_keeps_an_rtu_port_in_slave_role(client, inverter):
     assert (write["slave"]["baud"], write["slave"]["parity"]) == (19200, "e")
 
 
-def test_tcp_and_rtu_together_already_serve_modbus_tcp(client, inverter):
+async def test_tcp_and_rtu_together_already_serve_modbus_tcp(client, inverter):
     """Mode "both" read as wrong and was rewritten to "tcp", ending the RTU side."""
     inverter.bodies["/api/config/modbus"] = modbus_config_as_read(mode="both")
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is False
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is False
 
 
 @pytest.mark.parametrize(
     ("read", "written"),
     [("off", "tcp"), ("rtu", "both"), ("tcp", "tcp"), ("both", "both")],
 )
-def test_enabling_tcp_keeps_every_transport_already_served(
+async def test_enabling_tcp_keeps_every_transport_already_served(
     client, inverter, read, written
 ):
     """An RTU-only slave was written "tcp" and cut off the RS485 client it served."""
     inverter.bodies["/api/config/modbus"] = modbus_config_as_read(mode=read, port=1502)
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
     assert modbus_write(inverter)["slave"]["mode"] == written
 
 
-def test_the_field_descriptions_are_not_written_back(client, inverter):
+async def test_the_field_descriptions_are_not_written_back(client, inverter):
     inverter.bodies["/api/config/modbus"] = modbus_config_as_read(mode="rtu")
 
-    client.ensure_modbus_enabled(502, 200, 1)
+    (await client.ensure_modbus_enabled(502, 200, 1))
 
     def keys(node):
         if isinstance(node, dict):
@@ -877,7 +903,7 @@ def test_the_field_descriptions_are_not_written_back(client, inverter):
         ("192.0.2.50,198.51.100.0/24", "192.0.2.50,198.51.100.0/24,192.0.2.99"),
     ],
 )
-def test_home_assistant_joins_the_allowed_hosts(
+async def test_home_assistant_joins_the_allowed_hosts(
     client, inverter, monkeypatch, allowed, written
 ):
     """Replacing the list locked out every other host on it, an energy manager say."""
@@ -885,10 +911,10 @@ def test_home_assistant_joins_the_allowed_hosts(
         ctr={"on": True, "restriction": {"on": True, "ip": allowed}}
     )
     monkeypatch.setattr(
-        FroniusWebClient, "resolve_client_ip", lambda self: "192.0.2.99"
+        FroniusWebClient, "resolve_client_ip", awaitable(lambda self: "192.0.2.99")
     )
 
-    assert client.ensure_modbus_enabled(
+    assert await client.ensure_modbus_enabled(
         502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
     )
 
@@ -898,25 +924,24 @@ def test_home_assistant_joins_the_allowed_hosts(
     }
 
 
-def test_a_network_that_covers_home_assistant_is_left_alone(
+async def test_a_network_that_covers_home_assistant_is_left_alone(
     client, inverter, monkeypatch
 ):
     inverter.bodies["/api/config/modbus"] = modbus_config_as_read(
         ctr={"on": True, "restriction": {"on": True, "ip": "192.0.2.0/24"}}
     )
     monkeypatch.setattr(
-        FroniusWebClient, "resolve_client_ip", lambda self: "192.0.2.99"
+        FroniusWebClient, "resolve_client_ip", awaitable(lambda self: "192.0.2.99")
     )
 
     assert (
-        client.ensure_modbus_enabled(
+        await client.ensure_modbus_enabled(
             502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
         )
-        is False
-    )
+    ) is False
 
 
-def test_an_inactive_list_is_not_switched_on_with_home_assistant(
+async def test_an_inactive_list_is_not_switched_on_with_home_assistant(
     client, inverter, monkeypatch
 ):
     """Hosts the owner entered and switched off stay off; only Home Assistant is let in."""
@@ -924,11 +949,13 @@ def test_an_inactive_list_is_not_switched_on_with_home_assistant(
         ctr={"on": True, "restriction": {"on": False, "ip": "192.0.2.50"}}
     )
     monkeypatch.setattr(
-        FroniusWebClient, "resolve_client_ip", lambda self: "192.0.2.99"
+        FroniusWebClient, "resolve_client_ip", awaitable(lambda self: "192.0.2.99")
     )
 
-    client.ensure_modbus_enabled(
-        502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+    (
+        await client.ensure_modbus_enabled(
+            502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+        )
     )
 
     assert modbus_write(inverter)["slave"]["ctr"]["restriction"] == {
@@ -937,23 +964,24 @@ def test_an_inactive_list_is_not_switched_on_with_home_assistant(
     }
 
 
-def test_a_matching_restriction_is_not_rewritten(client, inverter, monkeypatch):
+async def test_a_matching_restriction_is_not_rewritten(client, inverter, monkeypatch):
     inverter.bodies["/api/config/modbus"] = modbus_config(
         ctr={"on": True, "restriction": {"on": True, "ip": "192.0.2.99"}}
     )
     monkeypatch.setattr(
-        FroniusWebClient, "resolve_client_ip", lambda self: "192.0.2.99"
+        FroniusWebClient, "resolve_client_ip", awaitable(lambda self: "192.0.2.99")
     )
 
     assert (
-        client.ensure_modbus_enabled(
+        await client.ensure_modbus_enabled(
             502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
         )
-        is False
-    )
+    ) is False
 
 
-def test_an_unroutable_host_makes_the_restriction_unresolvable(client, monkeypatch):
+async def test_an_unroutable_host_makes_the_restriction_unresolvable(
+    client, monkeypatch
+):
     class RefusingSocket:
         def __enter__(self):
             return self
@@ -967,12 +995,14 @@ def test_an_unroutable_host_makes_the_restriction_unresolvable(client, monkeypat
     monkeypatch.setattr(socket, "socket", lambda *_args: RefusingSocket())
 
     with pytest.raises(ClientIpResolutionError):
-        client.ensure_modbus_enabled(
-            502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+        (
+            await client.ensure_modbus_enabled(
+                502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+            )
         )
 
 
-def test_a_loopback_client_ip_is_refused_as_a_restriction(client, monkeypatch):
+async def test_a_loopback_client_ip_is_refused_as_a_restriction(client, monkeypatch):
     class LoopbackSocket:
         def __enter__(self):
             return self
@@ -989,8 +1019,10 @@ def test_a_loopback_client_ip_is_refused_as_a_restriction(client, monkeypatch):
     monkeypatch.setattr(socket, "socket", lambda *_args: LoopbackSocket())
 
     with pytest.raises(ClientIpResolutionError):
-        client.ensure_modbus_enabled(
-            502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+        (
+            await client.ensure_modbus_enabled(
+                502, 200, 1, restriction=ModbusRestriction.HOME_ASSISTANT
+            )
         )
 
 
@@ -1003,10 +1035,10 @@ def posted(inverter: FakeInverter, path: str) -> dict | None:
     )
 
 
-def test_the_mode_and_the_target_are_written_apart(client, inverter):
+async def test_the_mode_and_the_target_are_written_apart(client, inverter):
     """HYB_EM_MODE is self-consumption optimisation; the SoC window is a separate switch."""
-    assert client.set_battery_config(1) is True
-    assert client.set_battery_power(-2000) is True
+    assert (await client.set_battery_config(1)) is True
+    assert (await client.set_battery_power(-2000)) is True
 
     assert posts(inverter) == [
         ("/api/config/batteries", {"HYB_EM_MODE": 1}),
@@ -1014,14 +1046,16 @@ def test_the_mode_and_the_target_are_written_apart(client, inverter):
     ]
 
 
-def test_leaving_manual_battery_mode_leaves_the_soc_window_alone(client, inverter):
-    assert client.set_battery_config(0) is True
+async def test_leaving_manual_battery_mode_leaves_the_soc_window_alone(
+    client, inverter
+):
+    assert (await client.set_battery_config(0)) is True
 
     assert posted(inverter, "/api/config/batteries") == {"HYB_EM_MODE": 0}
 
 
-def test_the_soc_window_write_sends_the_limits_given(client, inverter):
-    assert client.set_soc_limits(soc_min=10, soc_max=95)
+async def test_the_soc_window_write_sends_the_limits_given(client, inverter):
+    assert await client.set_soc_limits(soc_min=10, soc_max=95)
 
     assert posted(inverter, "/api/config/batteries") == {
         "BAT_M0_SOC_MIN": 10,
@@ -1029,8 +1063,8 @@ def test_the_soc_window_write_sends_the_limits_given(client, inverter):
     }
 
 
-def test_the_charge_sources_are_written_as_booleans(client, inverter):
-    assert client.set_battery_charge_sources(True, False) is True
+async def test_the_charge_sources_are_written_as_booleans(client, inverter):
+    assert (await client.set_battery_charge_sources(True, False)) is True
 
     assert posted(inverter, "/api/config/batteries") == {
         "HYB_EVU_CHARGEFROMGRID": True,
@@ -1038,8 +1072,8 @@ def test_the_charge_sources_are_written_as_booleans(client, inverter):
     }
 
 
-def test_disabling_the_solar_api_also_clears_the_discovery_flag(client, inverter):
-    assert client.set_solar_api_enabled(False) is True
+async def test_disabling_the_solar_api_also_clears_the_discovery_flag(client, inverter):
+    assert (await client.set_solar_api_enabled(False)) is True
 
     assert posted(inverter, "/api/config/solar_api") == {
         "SolarAPIv1Enabled": False,
@@ -1047,7 +1081,7 @@ def test_disabling_the_solar_api_also_clears_the_discovery_flag(client, inverter
     }
 
 
-def test_enabling_the_solar_api_keeps_the_discovery_switch(client, inverter):
+async def test_enabling_the_solar_api_keeps_the_discovery_switch(client, inverter):
     """The switch is the owner's own setting in the web interface; enabling must not clear it."""
     inverter.bodies["/api/config/solar_api"] = {
         "SolarAPIv1Enabled": False,
@@ -1055,7 +1089,7 @@ def test_enabling_the_solar_api_keeps_the_discovery_switch(client, inverter):
         "activeOnExternalDevicesDiscovered": True,
     }
 
-    assert client.set_solar_api_enabled(True) is True
+    assert (await client.set_solar_api_enabled(True)) is True
 
     assert posted(inverter, "/api/config/solar_api") == {
         "SolarAPIv1Enabled": True,
@@ -1092,18 +1126,18 @@ def posts(inverter: FakeInverter) -> list[tuple[str, dict | None]]:
         ("set_battery_charge_sources", (True, True)),
     ],
 )
-def test_a_battery_setting_already_in_place_is_not_written(
+async def test_a_battery_setting_already_in_place_is_not_written(
     client, inverter, write, arguments
 ):
     """Every battery write reconfigures the inverter; the same value again did so for nothing."""
     inverter.bodies[BATTERIES] = dict(BATTERY_CONFIG)
 
-    assert getattr(client, write)(*arguments) is False
+    assert (await getattr(client, write)(*arguments)) is False
 
     assert posts(inverter) == []
 
 
-def test_the_inverters_own_spelling_counts_as_the_same_value(client, inverter):
+async def test_the_inverters_own_spelling_counts_as_the_same_value(client, inverter):
     """It sends flags as words or numbers and modes capitalised; that is no change."""
     inverter.bodies[BATTERIES] = BATTERY_CONFIG | {
         "HYB_EVU_CHARGEFROMGRID": "true",
@@ -1111,17 +1145,19 @@ def test_the_inverters_own_spelling_counts_as_the_same_value(client, inverter):
         "BAT_M0_SOC_MODE": "Manual",
     }
 
-    assert client.set_battery_charge_sources(True, True) is False
-    assert client.set_soc_mode("manual") is False
+    assert (await client.set_battery_charge_sources(True, True)) is False
+    assert (await client.set_soc_mode("manual")) is False
 
     assert posts(inverter) == []
 
 
-def test_a_config_read_that_is_no_object_still_writes_everything(client, inverter):
+async def test_a_config_read_that_is_no_object_still_writes_everything(
+    client, inverter
+):
     """A list instead of an object raised AttributeError, an unknown error."""
     inverter.bodies[BATTERIES] = ["unexpected"]
 
-    client.set_backup_reserve(7)
+    (await client.set_backup_reserve(7))
 
     assert posts(inverter) == [(BATTERIES, {"HYB_BACKUP_RESERVED": 7})]
 
@@ -1136,14 +1172,14 @@ def test_a_config_read_that_is_no_object_still_writes_everything(client, inverte
         ),
     ],
 )
-def test_a_config_that_must_be_written_back_but_is_no_object_is_an_error(
+async def test_a_config_that_must_be_written_back_but_is_no_object_is_an_error(
     client, inverter, path, write
 ):
     """Without the object there is nothing to write back; that is a failed write, not a crash."""
     inverter.bodies[path] = ["unexpected"]
 
     with pytest.raises(FroniusWebResponseError, match="no object"):
-        write(client)
+        await write(client)
 
     assert posts(inverter) == []
 
@@ -1169,7 +1205,7 @@ DEVICE_CHANGED = BATTERY_CONFIG | {
         (lambda c: c.set_battery_power(-300), {"HYB_EM_POWER": -300}),
     ],
 )
-def test_a_battery_write_sends_only_what_was_asked(client, inverter, write, sent):
+async def test_a_battery_write_sends_only_what_was_asked(client, inverter, write, sent):
     """Cached companions undid a change made since the last poll.
 
     Changing the maximum re-sent a stale minimum, switching AC charging re-sent
@@ -1177,31 +1213,31 @@ def test_a_battery_write_sends_only_what_was_asked(client, inverter, write, sent
     """
     inverter.bodies[BATTERIES] = dict(DEVICE_CHANGED)
 
-    write(client)
+    await write(client)
 
     assert posts(inverter) == ([] if sent is None else [(BATTERIES, sent)])
 
 
-def test_the_soc_window_is_checked_against_the_fresh_read(client, inverter):
+async def test_the_soc_window_is_checked_against_the_fresh_read(client, inverter):
     """A maximum below the minimum set on the inverter since the last poll is refused."""
     inverter.bodies[BATTERIES] = dict(DEVICE_CHANGED)
 
     with pytest.raises(ControlRefused) as refused:
-        client.set_soc_limits(soc_max=15)
+        (await client.set_soc_limits(soc_max=15))
 
     assert refused.value.key == "soc_minimum_above_maximum"
     assert posts(inverter) == []
 
 
-def test_only_the_battery_fields_that_differ_are_written(client, inverter):
+async def test_only_the_battery_fields_that_differ_are_written(client, inverter):
     inverter.bodies[BATTERIES] = dict(BATTERY_CONFIG)
 
-    assert client.set_soc_limits(10, 90) is True
+    assert (await client.set_soc_limits(10, 90)) is True
 
     assert posts(inverter) == [(BATTERIES, {"BAT_M0_SOC_MAX": 90})]
 
 
-def test_an_unreadable_battery_config_still_writes_everything(client, inverter):
+async def test_an_unreadable_battery_config_still_writes_everything(client, inverter):
     """Not knowing the current value is no reason to drop the owner's input."""
     original_handle = inverter.handle
 
@@ -1213,7 +1249,7 @@ def test_an_unreadable_battery_config_still_writes_everything(client, inverter):
 
     inverter.handle = fail_the_read
 
-    client.set_backup_reserve(7)
+    (await client.set_backup_reserve(7))
 
     assert posts(inverter) == [(BATTERIES, {"HYB_BACKUP_RESERVED": 7})]
 
@@ -1221,7 +1257,7 @@ def test_an_unreadable_battery_config_still_writes_everything(client, inverter):
 @pytest.mark.parametrize(
     "refusal", ["writeFailure", "permissionFailure", "validationErrors", "unknownNodes"]
 )
-def test_a_field_the_inverter_refuses_is_an_error(client, inverter, refusal):
+async def test_a_field_the_inverter_refuses_is_an_error(client, inverter, refusal):
     """The inverter reports each field in the body (seen on a GEN24); HTTP 200 alone is not success."""
     inverter.bodies[BATTERIES] = {"HYB_BACKUP_RESERVED": 5}
     original_handle = inverter.handle
@@ -1235,10 +1271,10 @@ def test_a_field_the_inverter_refuses_is_an_error(client, inverter, refusal):
     inverter.handle = answer_with_a_refusal
 
     with pytest.raises(FroniusWebResponseError, match="HYB_BACKUP_RESERVED"):
-        client.set_backup_reserve(7)
+        (await client.set_backup_reserve(7))
 
 
-def test_a_write_rejected_with_an_error_status_names_what_the_inverter_refused(
+async def test_a_write_rejected_with_an_error_status_names_what_the_inverter_refused(
     client, inverter
 ):
     """A bare "HTTP 400" left owners and maintainers without the inverter's reason."""
@@ -1259,7 +1295,7 @@ def test_a_write_rejected_with_an_error_status_names_what_the_inverter_refused(
     inverter.handle = reject_the_write
 
     with pytest.raises(FroniusWebResponseError, match="softLimit.powerLimit") as err:
-        client.set_export_soft_limit(6000)
+        (await client.set_export_soft_limit(6000))
 
     assert err.value.status_code == 400
 
@@ -1274,35 +1310,37 @@ def test_a_write_rejected_with_an_error_status_names_what_the_inverter_refused(
     ],
     ids=["empty", "no-active-power", "no-soft-limit", "soft-limit-null"],
 )
-def test_a_soft_limit_write_on_another_shape_is_a_failed_read(client, inverter, body):
+async def test_a_soft_limit_write_on_another_shape_is_a_failed_read(
+    client, inverter, body
+):
     """A raw KeyError reached the user instead of the translated write error."""
     inverter.bodies["/api/config/limit_settings/powerLimits"] = body
 
     with pytest.raises(FroniusWebResponseError, match="no export soft limit"):
-        client.set_export_soft_limit(5000)
+        (await client.set_export_soft_limit(5000))
 
     assert posts(inverter) == []
 
 
-def test_a_solar_api_already_in_that_state_is_not_written(client, inverter):
+async def test_a_solar_api_already_in_that_state_is_not_written(client, inverter):
     inverter.bodies["/api/config/solar_api"] = {
         "SolarAPIv1Enabled": False,
         "activeOnExternalDevicesDiscovered": False,
     }
 
-    assert client.set_solar_api_enabled(False) is False
+    assert (await client.set_solar_api_enabled(False)) is False
 
     assert posts(inverter) == []
 
 
-def test_an_export_limit_already_in_place_is_not_written(client, inverter):
+async def test_an_export_limit_already_in_place_is_not_written(client, inverter):
     inverter.bodies["/api/config/limit_settings/powerLimits"] = {
         "exportLimits": {
             "activePower": {"softLimit": {"enabled": True, "powerLimit": 7000}}
         }
     }
 
-    assert client.set_export_soft_limit(7000) is False
+    assert (await client.set_export_soft_limit(7000)) is False
 
     assert posts(inverter) == []
 
@@ -1322,26 +1360,28 @@ def power_limits_1_42(soft_enabled: bool, export_limit: float) -> dict:
     }
 
 
-def test_the_export_soft_limit_is_written_where_firmware_1_42_keeps_it(
+async def test_the_export_soft_limit_is_written_where_firmware_1_42_keeps_it(
     client, inverter
 ):
     """Issue 154: a powerLimit added under softLimit made 1.42 answer 400."""
     path = "/api/config/limit_settings/powerLimits"
     inverter.bodies[path] = power_limits_1_42(False, 0.0)
 
-    assert client.set_export_soft_limit(7000) is True
+    assert (await client.set_export_soft_limit(7000)) is True
 
     active_power = posted(inverter, path)["exportLimits"]["activePower"]
     assert active_power["exportLimit"] == 7000
     assert active_power["softLimit"] == {"enabled": True}
 
 
-def test_an_export_limit_in_place_on_firmware_1_42_is_not_written(client, inverter):
+async def test_an_export_limit_in_place_on_firmware_1_42_is_not_written(
+    client, inverter
+):
     inverter.bodies["/api/config/limit_settings/powerLimits"] = power_limits_1_42(
         True, 7000.0
     )
 
-    assert client.set_export_soft_limit(7000) is False
+    assert (await client.set_export_soft_limit(7000)) is False
 
     assert posts(inverter) == []
 
@@ -1368,26 +1408,26 @@ def test_an_export_limit_in_place_on_firmware_1_42_is_not_written(client, invert
     ],
     ids=["1.41", "1.42"],
 )
-def test_a_soft_limit_while_power_control_is_off_is_refused_before_any_write(
+async def test_a_soft_limit_while_power_control_is_off_is_refused_before_any_write(
     client, inverter, power_limits
 ):
     """Issue 154: firmware 1.41 answered 400 softLimit_disabled while Power Control was off."""
     inverter.bodies["/api/config/limit_settings/powerLimits"] = power_limits
 
     with pytest.raises(ControlRefused) as refused:
-        client.set_export_soft_limit(7000)
+        (await client.set_export_soft_limit(7000))
 
     assert refused.value.key == "export_limit_power_control_off"
     assert posts(inverter) == []
 
 
-def test_the_modbus_control_reset_is_a_bare_command(client, inverter):
-    assert client.reset_modbus_control() is True
+async def test_the_modbus_control_reset_is_a_bare_command(client, inverter):
+    assert (await client.reset_modbus_control()) is True
 
     assert posted(inverter, "/api/commands/ModbusReset") is None
 
 
-def test_the_export_soft_limit_write_leaves_the_rest_of_the_config_alone(
+async def test_the_export_soft_limit_write_leaves_the_rest_of_the_config_alone(
     client, inverter
 ):
     inverter.bodies["/api/config/limit_settings/powerLimits"] = {
@@ -1400,7 +1440,7 @@ def test_the_export_soft_limit_write_leaves_the_rest_of_the_config_alone(
         "otherSetting": "untouched",
     }
 
-    assert client.set_export_soft_limit(7000) is True
+    assert (await client.set_export_soft_limit(7000)) is True
 
     written = posted(inverter, "/api/config/limit_settings/powerLimits")
     assert written["exportLimits"]["activePower"]["softLimit"] == {
@@ -1411,37 +1451,39 @@ def test_the_export_soft_limit_write_leaves_the_rest_of_the_config_alone(
     assert written["otherSetting"] == "untouched"
 
 
-def test_the_login_request_names_the_user_it_authenticates(inverter, monkeypatch):
+async def test_the_login_request_names_the_user_it_authenticates(inverter, monkeypatch):
     seen: list[dict] = []
-    original = requests.adapters.HTTPAdapter.send
+    original = web_transport._exchange
 
-    def record(adapter, request, **kwargs):
-        seen.append(parse_qs(urlparse(request.url).query))
-        return original(adapter, request, **kwargs)
+    async def record(_session, _method, url, **kwargs):
+        seen.append(parse_qs(urlparse(url).query))
+        return await original(_session, _method, url, **kwargs)
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", record)
+    monkeypatch.setattr(web_transport, "_exchange", record)
 
-    login(HOST, "technician", password="secret")
+    (await login(HOST, "technician", password="secret"))
 
     assert {"user": ["technician"]} in seen
 
 
-def test_assisted_setup_converts_an_existing_float_register_map():
+async def test_assisted_setup_converts_an_existing_float_register_map():
     """A TCP map that only differed in sunspecMode counted as ready, then failed the probe."""
     client = FroniusWebClient("192.0.2.10")
-    client.get_modbus_config = lambda: {
-        "slave": {
-            "mode": "tcp",
-            "port": 502,
-            "meterAddress": 200,
-            "rtu_inverter_slave_id": 1,
-            "sunspecMode": "float",
-            "ctr": {"on": True, "restriction": {"on": False}},
+    client.get_modbus_config = awaitable(
+        lambda: {
+            "slave": {
+                "mode": "tcp",
+                "port": 502,
+                "meterAddress": 200,
+                "rtu_inverter_slave_id": 1,
+                "sunspecMode": "float",
+                "ctr": {"on": True, "restriction": {"on": False}},
+            }
         }
-    }
+    )
     sent = {}
-    client._post = lambda path, payload=None: sent.update(payload=payload)
-    assert client.ensure_modbus_enabled(502, 200, 1, ModbusRestriction.KEEP, True)
+    client._post = awaitable(lambda path, payload=None: sent.update(payload=payload))
+    assert await client.ensure_modbus_enabled(502, 200, 1, ModbusRestriction.KEEP, True)
     assert sent["payload"]["slave"]["sunspecMode"] == "int"
 
 
@@ -1456,13 +1498,13 @@ def _float_map_client(sunspec_mode="float", slave_mode="tcp"):
     }
     if sunspec_mode is not None:
         slave["sunspecMode"] = sunspec_mode
-    client.get_modbus_config = lambda: {"slave": slave}
+    client.get_modbus_config = awaitable(lambda: {"slave": slave})
     sent = []
-    client._post = lambda path, payload=None: sent.append(payload)
+    client._post = awaitable(lambda path, payload=None: sent.append(payload))
     return client, sent
 
 
-def test_a_float_map_is_not_switched_without_consent():
+async def test_a_float_map_is_not_switched_without_consent():
     """Another device may read the float map (a Bosch energy manager at SolarEdge issue 345).
 
     Switching it to int + SF stops that device; the setup did it silently.
@@ -1470,48 +1512,48 @@ def test_a_float_map_is_not_switched_without_consent():
     client, sent = _float_map_client()
 
     with pytest.raises(froniuswebclient.SunSpecModeChangeNeeded) as raised:
-        client.ensure_modbus_enabled(502, 200, 1)
+        (await client.ensure_modbus_enabled(502, 200, 1))
 
     assert raised.value.current_mode == "float"
     assert sent == []
 
 
 @pytest.mark.parametrize("slave_mode", ["rtu", "both"])
-def test_a_float_map_served_over_rtu_waits_for_consent_too(slave_mode):
+async def test_a_float_map_served_over_rtu_waits_for_consent_too(slave_mode):
     client, sent = _float_map_client(slave_mode=slave_mode)
 
     with pytest.raises(froniuswebclient.SunSpecModeChangeNeeded):
-        client.ensure_modbus_enabled(502, 200, 1)
+        (await client.ensure_modbus_enabled(502, 200, 1))
 
     assert sent == []
 
 
-def test_a_float_map_nobody_is_served_needs_no_consent():
+async def test_a_float_map_nobody_is_served_needs_no_consent():
     """With the Modbus slave off no device reads the float models: asking only alarms."""
     client, sent = _float_map_client(slave_mode="off")
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
     assert sent[0]["slave"]["sunspecMode"] == "int"
 
 
-def test_a_map_without_a_model_type_needs_no_consent():
+async def test_a_map_without_a_model_type_needs_no_consent():
     """Firmware that does not name the model type has nothing to switch away from."""
     client, sent = _float_map_client(sunspec_mode=None)
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
     assert sent[0]["slave"]["sunspecMode"] == "int"
 
 
-def test_the_soc_mode_is_written_alone(client, inverter):
+async def test_the_soc_mode_is_written_alone(client, inverter):
     """Switching the window to manual must not rewrite the limits the inverter holds."""
-    assert client.set_soc_mode("manual") is True
+    assert (await client.set_soc_mode("manual")) is True
 
     assert posted(inverter, "/api/config/batteries") == {"BAT_M0_SOC_MODE": "manual"}
 
 
-def test_the_backup_reserve_is_written_alone(client, inverter):
+async def test_the_backup_reserve_is_written_alone(client, inverter):
     """The reserve is independent of the SoC window: the write must not touch the SoC mode."""
-    assert client.set_backup_reserve(30) is True
+    assert (await client.set_backup_reserve(30)) is True
 
     assert posted(inverter, "/api/config/batteries") == {"HYB_BACKUP_RESERVED": 30}
 
@@ -1519,51 +1561,53 @@ def test_the_backup_reserve_is_written_alone(client, inverter):
 # -- the transport boundary -----------------------------------------
 
 
-def test_a_transport_error_leaves_the_host_behind(client, monkeypatch):
+async def test_a_transport_error_leaves_the_host_behind(client, monkeypatch):
     """Requests puts the URL into its errors; the host must not travel into the logs."""
 
-    def refuse(adapter, request, **_kwargs):
-        raise requests.ConnectionError(f"Max retries exceeded with url: {request.url}")
+    async def refuse(_session, _method, url, **_kwargs):
+        raise aiohttp.ClientConnectionError(f"Max retries exceeded with url: {url}")
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+    monkeypatch.setattr(web_transport, "_exchange", refuse)
     with pytest.raises(FroniusWebUnreachable) as caught:
-        client.get_battery_config()
+        (await client.get_battery_config())
     assert HOST not in str(caught.value)
     assert isinstance(caught.value, OSError)
 
 
-def test_the_public_meter_path_is_behind_the_same_boundary(client, monkeypatch, caplog):
+async def test_the_public_meter_path_is_behind_the_same_boundary(
+    client, monkeypatch, caplog
+):
     """That path swallows the error into a debug line; the line must not name the host either."""
 
-    def refuse(adapter, request, **_kwargs):
-        raise requests.ReadTimeout(f"Read timed out: {request.url}")
+    async def refuse(_session, _method, url, **_kwargs):
+        raise aiohttp.ServerTimeoutError(f"Read timed out: {url}")
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+    monkeypatch.setattr(web_transport, "_exchange", refuse)
     with caplog.at_level(logging.DEBUG):
-        assert client.get_power_meter_info() is None
+        assert (await client.get_power_meter_info()) is None
     assert caplog.records
     assert all(HOST not in record.getMessage() for record in caplog.records)
 
 
-def test_a_server_error_is_an_answer_not_an_outage(client, inverter):
+async def test_a_server_error_is_an_answer_not_an_outage(client, inverter):
     """HTTP 500 is a responding device; it must not read as switched off."""
     inverter.statuses["/api/config/batteries"] = 500
     with pytest.raises(FroniusWebResponseError) as caught:
-        client.get_battery_config()
+        (await client.get_battery_config())
     assert not isinstance(caught.value, OSError)
     assert "500" in str(caught.value)
     assert HOST not in str(caught.value)
 
 
-def test_the_login_is_behind_the_same_boundary(monkeypatch):
+async def test_the_login_is_behind_the_same_boundary(monkeypatch):
     """The login called requests itself, and the config flow logged its text."""
 
-    def refuse(adapter, request, **_kwargs):
-        raise requests.ConnectionError(f"Max retries exceeded with url: {request.url}")
+    async def refuse(_session, _method, url, **_kwargs):
+        raise aiohttp.ClientConnectionError(f"Max retries exceeded with url: {url}")
 
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+    monkeypatch.setattr(web_transport, "_exchange", refuse)
     with pytest.raises(FroniusWebUnreachable) as caught:
-        froniuswebclient.mint_token(HOST, "customer", "secret")
+        (await web_transport.mint_token(HOST, "customer", "secret"))
     assert HOST not in str(caught.value)
 
 
@@ -1575,13 +1619,13 @@ def test_the_login_is_behind_the_same_boundary(monkeypatch):
         {"slave": {"ctr": {"restriction": ["unexpected"]}}},
     ],
 )
-def test_a_modbus_config_of_the_wrong_shape_is_a_response_error(config):
+async def test_a_modbus_config_of_the_wrong_shape_is_a_response_error(config):
     """An AttributeError reached the config flow as an unknown error."""
     client = FroniusWebClient("192.0.2.10")
-    client.get_modbus_config = lambda: config
+    client.get_modbus_config = awaitable(lambda: config)
 
     with pytest.raises(FroniusWebResponseError, match="no object"):
-        client.ensure_modbus_enabled(502, 200, 1)
+        (await client.ensure_modbus_enabled(502, 200, 1))
 
 
 @pytest.mark.parametrize(
@@ -1592,44 +1636,48 @@ def test_a_modbus_config_of_the_wrong_shape_is_a_response_error(config):
         {"slave": {"ctr": {"restriction": ""}}},
     ],
 )
-def test_an_empty_wrong_type_in_the_modbus_config_is_not_written_back_with_defaults(
+async def test_an_empty_wrong_type_in_the_modbus_config_is_not_written_back_with_defaults(
     config,
 ):
     """`[]`, `0` and `""` became `{}` and a POST with defaults followed."""
     client = FroniusWebClient("192.0.2.10")
-    client.get_modbus_config = lambda: config
-    client._post = lambda *_args, **_kwargs: pytest.fail(
-        "posted a malformed config back"
+    client.get_modbus_config = awaitable(lambda: config)
+    client._post = awaitable(
+        lambda *_args, **_kwargs: pytest.fail("posted a malformed config back")
     )
 
     with pytest.raises(FroniusWebResponseError, match="no object"):
-        client.ensure_modbus_enabled(502, 200, 1)
+        (await client.ensure_modbus_enabled(502, 200, 1))
 
 
-def test_an_unreadable_soc_window_is_not_written(client, inverter):
+async def test_an_unreadable_soc_window_is_not_written(client, inverter):
     """An HTTP 500 read passed the window check as an empty config."""
     inverter.statuses[BATTERIES] = 500
 
     with pytest.raises(FroniusWebResponseError):
-        client.check_soc_window(soc_min=50)
+        (await client.check_soc_window(soc_min=50))
     with pytest.raises(FroniusWebResponseError):
-        client.set_soc_limits(soc_min=50)
+        (await client.set_soc_limits(soc_min=50))
     # Both limits given need no companion from the read, and still no write.
     with pytest.raises(FroniusWebResponseError):
-        client.set_soc_limits(soc_min=10, soc_max=90)
+        (await client.set_soc_limits(soc_min=10, soc_max=90))
 
     assert posts(inverter) == []
 
 
 @pytest.mark.parametrize("master", [[], "rtu", 0])
-def test_a_malformed_master_is_not_written_back(master):
+async def test_a_malformed_master_is_not_written_back(master):
     """`master` went into the Modbus setup POST unchecked."""
     client = FroniusWebClient("192.0.2.10")
-    client.get_modbus_config = lambda: {"master": master, "slave": {"mode": "rtu"}}
-    client._post = lambda *_args, **_kwargs: pytest.fail("posted a malformed master")
+    client.get_modbus_config = awaitable(
+        lambda: {"master": master, "slave": {"mode": "rtu"}}
+    )
+    client._post = awaitable(
+        lambda *_args, **_kwargs: pytest.fail("posted a malformed master")
+    )
 
     with pytest.raises(FroniusWebResponseError, match="no object"):
-        client.ensure_modbus_enabled(502, 200, 1)
+        (await client.ensure_modbus_enabled(502, 200, 1))
 
 
 @pytest.mark.parametrize(
@@ -1643,48 +1691,54 @@ def test_a_malformed_master_is_not_written_back(master):
         {"BAT_M0_SOC_MIN": 20, "BAT_M0_SOC_MAX": float("inf")},
     ],
 )
-def test_a_soc_window_without_a_numeric_limit_is_unreadable(
+async def test_a_soc_window_without_a_numeric_limit_is_unreadable(
     client, inverter, battery_config
 ):
     """A text or missing maximum passed the check before Modbus."""
     inverter.bodies[BATTERIES] = battery_config
 
     with pytest.raises(FroniusWebResponseError, match="SoC window"):
-        client.check_soc_window(soc_min=50)
+        (await client.check_soc_window(soc_min=50))
 
 
 @pytest.mark.parametrize("held", [[1], "garbage", 2])
-def test_a_flag_the_inverter_holds_in_no_known_form_is_written(client, inverter, held):
+async def test_a_flag_the_inverter_holds_in_no_known_form_is_written(
+    client, inverter, held
+):
     """An unreadable flag compared as already set, nothing was sent."""
     inverter.bodies[BATTERIES] = {"HYB_BM_CHARGEFROMAC": held}
 
-    assert client.set_battery_charge_sources(charge_from_ac=False) is True
+    assert (await client.set_battery_charge_sources(charge_from_ac=False)) is True
 
     assert posts(inverter) == [(BATTERIES, {"HYB_BM_CHARGEFROMAC": False})]
 
 
-def test_modbus_control_in_no_known_form_is_switched_on():
+async def test_modbus_control_in_no_known_form_is_switched_on():
     """`on: [1]` read as on, and Modbus control stayed as it was."""
     client = FroniusWebClient("192.0.2.10")
-    client.get_modbus_config = lambda: {
-        "slave": {
-            "mode": "tcp",
-            "sunspecMode": "int",
-            "port": 502,
-            "meterAddress": 200,
-            "rtu_inverter_slave_id": 1,
-            "ctr": {"on": [1], "restriction": {"on": False}},
+    client.get_modbus_config = awaitable(
+        lambda: {
+            "slave": {
+                "mode": "tcp",
+                "sunspecMode": "int",
+                "port": 502,
+                "meterAddress": 200,
+                "rtu_inverter_slave_id": 1,
+                "ctr": {"on": [1], "restriction": {"on": False}},
+            }
         }
-    }
+    )
     sent = []
-    client._post = lambda path, payload: sent.append(payload)
+    client._post = awaitable(lambda path, payload: sent.append(payload))
 
-    assert client.ensure_modbus_enabled(502, 200, 1) is True
+    assert (await client.ensure_modbus_enabled(502, 200, 1)) is True
 
     assert sent[0]["slave"]["ctr"]["on"] is True
 
 
-def test_an_export_limit_switched_on_in_no_known_form_is_written(client, inverter):
+async def test_an_export_limit_switched_on_in_no_known_form_is_written(
+    client, inverter
+):
     """`enabled: [1]` read as on, the limit counted as in place."""
     inverter.bodies["/api/config/limit_settings/powerLimits"] = {
         "exportLimits": {
@@ -1692,9 +1746,36 @@ def test_an_export_limit_switched_on_in_no_known_form_is_written(client, inverte
         }
     }
 
-    assert client.set_export_soft_limit(7000) is True
+    assert (await client.set_export_soft_limit(7000)) is True
 
 
 def test_an_infinite_modbus_setting_reads_as_its_fallback():
     """The client's own converter: int(inf) raised OverflowError."""
     assert froniuswebclient._as_int(float("inf"), 502) == 502
+
+
+async def test_a_status_page_answering_an_error_is_not_remembered(inverter):
+    """requests raised on the status before the body was read; aiohttp does not."""
+    inverter.hashing_version = 1
+    inverter.statuses["/api/status/common"] = 500
+
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0)
+        == "sha256"
+    )
+
+    inverter.statuses.pop("/api/status/common")
+    assert (
+        await web_transport._hash_mode(None, f"http://{HOST}", "customer", 4.0) == "md5"
+    )
+
+
+async def test_a_request_that_times_out_is_an_outage(client, monkeypatch):
+    """aiohttp's total timeout raises TimeoutError, which is no ClientError."""
+
+    async def too_slow(*_args, **_kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(web_transport, "_exchange", too_slow)
+    with pytest.raises(FroniusWebUnreachable):
+        await client.get_battery_config()

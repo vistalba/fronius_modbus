@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
-from .conftest import INVERTER_UNIT_ID
+from .conftest import INVERTER_UNIT_ID, awaitable
 from .ha_test_plugin import MockConfigEntry
 from .test_web_control import FakeWebClient
 
@@ -65,14 +65,20 @@ def web_client(monkeypatch) -> SetupWebClient:
     """One fake client behind every FroniusWebClient the integration constructs."""
     client = SetupWebClient()
     monkeypatch.setattr(fronius_modbus, "FroniusWebClient", lambda *a, **k: client)
-    monkeypatch.setattr(config_flow.FroniusWebClient, "login", lambda self: True)
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "ensure_modbus_enabled", lambda self, *a: True
+        config_flow.FroniusWebClient, "login", awaitable(lambda self: True)
+    )
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient,
+        "ensure_modbus_enabled",
+        awaitable(lambda self, *a: True),
     )
     monkeypatch.setattr(
         config_flow,
         "mint_token",
-        lambda host, user, password: {"realm": "r", "token": "t"},
+        awaitable(
+            lambda host, user, password, **_session: {"realm": "r", "token": "t"}
+        ),
     )
     return client
 

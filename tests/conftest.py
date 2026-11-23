@@ -1,5 +1,7 @@
 """Shared fixtures: the captured inverter replayed into the in-memory Modbus backend."""
 
+import functools
+import inspect
 import json
 import pathlib
 
@@ -270,3 +272,43 @@ def _no_deprecated_home_assistant_calls(caplog):
         and "fronius_modbus" in record.getMessage()
     ]
     assert not reports, reports
+
+
+def awaitable(function):
+    """``function`` as the coroutine function the web client's methods are.
+
+    The fakes and stand-ins of the web client are written plainly; the code
+    under test awaits every call into the client since it moved to aiohttp.
+    """
+    if inspect.iscoroutinefunction(function):
+        return function
+
+    @functools.wraps(function)
+    async def awaited(*args, **kwargs):
+        result = function(*args, **kwargs)
+        # A plain stand-in that hands on to an awaited one returns its coroutine.
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return awaited
+
+
+class AsyncFake:
+    """A stand-in web client whose public methods, plain or patched in, are awaited.
+
+    `__getattr__` answers of a subclass are wrapped as well: several fakes
+    answer any method the real client has.
+    """
+
+    def __getattribute__(self, name):
+        try:
+            value = object.__getattribute__(self, name)
+        except AttributeError:
+            hook = getattr(type(self), "__getattr__", None)
+            if hook is None:
+                raise
+            value = hook(self, name)
+        if name.startswith("_") or inspect.isclass(value) or not callable(value):
+            return value
+        return awaitable(value)

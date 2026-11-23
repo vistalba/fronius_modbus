@@ -26,7 +26,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .conftest import METER_UNIT_ID
+from .conftest import METER_UNIT_ID, AsyncFake
 from .ha_test_plugin import MockConfigEntry
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(120)]
@@ -90,7 +90,7 @@ def _custom_integration(enable_custom_integrations):
     return enable_custom_integrations
 
 
-class _WebClientAnsweringNothing:
+class _WebClientAnsweringNothing(AsyncFake):
     """An inverter whose web interface gives no answer: no test reaches a socket."""
 
     def __init__(self, *_args, **_kwargs) -> None:

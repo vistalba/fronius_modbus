@@ -45,6 +45,7 @@ from .froniuswebclient import FroniusWebClient
 from .meter_topology import MeterTopology, parse_meter_topology
 from .token_store import async_forget_unused_tokens
 from .web_control import BATTERY_WRITE_MODBUS_RECOVERY_SECONDS, FroniusWebControl
+from .web_session import async_web_session
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,9 +86,7 @@ async def _async_meter_topology(
         # that is the configuration, not an unread answer.
         return replace(unconfirmed, confirmed=True)
 
-    info = await hass.async_add_executor_job(
-        public_client.get_power_meter_info, DEFAULT_METER_UNIT_ID
-    )
+    info = await public_client.get_power_meter_info(DEFAULT_METER_UNIT_ID)
     return parse_meter_topology(info)
 
 
@@ -113,13 +112,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> b
         hass, entry, has_token=api_token is not None
     )
     client = (
-        FroniusWebClient(host=host, username=api_username, password="", token=api_token)
+        FroniusWebClient(
+            host=host,
+            username=api_username,
+            password="",
+            token=api_token,
+            session=async_web_session(hass),
+        )
         if api_token
         else None
     )
     public_client = client
     if migrations.web_api_disabled(entry):
-        public_client = FroniusWebClient(host=host, username=API_USERNAME, password="")
+        public_client = FroniusWebClient(
+            host=host,
+            username=API_USERNAME,
+            password="",
+            session=async_web_session(hass),
+        )
 
     topology = await _async_meter_topology(hass, public_client)
     meter_unit_ids, primary = topology.unit_ids, topology.primary_unit_id

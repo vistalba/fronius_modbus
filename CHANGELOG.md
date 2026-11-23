@@ -7,6 +7,7 @@
 - The README describes every setup field and option, how and how often the values are updated, use cases, automation examples and the known limitations.
 
 ### Changed
+- The web interface of the inverter is reached through Home Assistant's own HTTP client instead of a thread per request. Logins, tokens and settings stay as they are; nothing to do after the update.
 - An MPPT string that was dark when Home Assistant started gets its sensors as soon as it sends a value, without reloading the entry.
 - An entry is recognised by its inverter's serial number instead of its address. Existing entries switch on their next start, nothing else changes for them; an inverter set up twice keeps both entries as they are.
 - The update intervals are stored apart from the connection settings. Existing entries are converted on the first start with every value kept; going back to 1.4.1 reads the same settings.

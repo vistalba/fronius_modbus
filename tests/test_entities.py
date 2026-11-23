@@ -38,11 +38,11 @@ from custom_components.fronius_modbus.fronius_modbus_api.storage import (
 from custom_components.fronius_modbus.froniuswebclient import (
     FroniusWebAuthError,
     FroniusWebResponseError,
-    FroniusWebUnreachable,
 )
 from custom_components.fronius_modbus.inverter_events import InverterEvent
 from custom_components.fronius_modbus.sensor import FroniusSensor
 from custom_components.fronius_modbus.web_control import WebData
+from custom_components.fronius_modbus.web_errors import FroniusWebUnreachable
 from homeassistant.exceptions import HomeAssistantError
 
 from .conftest import INVERTER_UNIT_ID, METER_UNIT_ID, NO_INVERTER_CAP_W

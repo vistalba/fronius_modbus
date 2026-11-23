@@ -86,7 +86,7 @@ All paths below are under `custom_components/fronius_modbus/`.
 | Layer | Modules | Rule |
 | --- | --- | --- |
 | Device library | `fronius_modbus_api/` (`device`, `storage`, `controls`, `writes`, `sunspec_models`, `exceptions`) | No `homeassistant` or `voluptuous` import, ever. Raises `ControlRefused` / `ControlUnavailable` with a translation key. |
-| Pure parsers | `derived`, `component_readings`, `inverter_events`, `energy_outputs`, `meter_topology`, `export_limit`, `web_errors`, `froniuswebclient` | No Home Assistant. `froniuswebclient` is synchronous `requests`, run in the executor. |
+| Pure parsers | `derived`, `component_readings`, `inverter_events`, `energy_outputs`, `meter_topology`, `export_limit`, `web_errors`, `web_transport`, `froniuswebclient` | No Home Assistant. `froniuswebclient` is async over aiohttp (`web_transport`), on the session `web_session` hands it. |
 | Runtime | `coordinator` (Modbus, fast meter power and web coordinators, `FroniusRuntimeData`), `web_control` (web writes, their serialisation, repair issue) | |
 | Entities | `descriptions` (dataclass types), `entities` (the table), `mppt_entities`, `energy_output_entities`, `event_entities`, `entity` | Behaviour is data: each row carries `value_fn`, `exists_fn`, `available_fn`, `set_fn`. |
 | Platforms | `sensor`, `number`, `select`, `switch`, `button`, `event` | Thin. They build entities from `entities.*_descriptions(runtime)`. |
@@ -166,8 +166,8 @@ by the mutation plan.
 
 - No logger call passes a host, serial, token, IP or URL
   (`tests/test_log_hygiene.py`). Log errors through `error_text(err)`.
-- `requests` is called in exactly one function, `_http` in
-  `froniuswebclient.py`.
+- aiohttp is reached in one place: `_exchange` in `web_transport.py`
+  makes the request, `_http` turns its errors into ones without the URL.
 - The web password is never stored. The derived token is password-equivalent
   and lives only in `token_store`: never in entry data, diagnostics or logs.
 - A new `WebData` field that carries an identifier must be added to the
@@ -236,8 +236,10 @@ plan.
 - Fixtures (`tests/conftest.py`): `connection`, `inverter_unit` and
   `meter_unit` for library tests, an in-memory device seeded from a captured
   GEN24; `mock_modbus` for Home Assistant level tests.
-- The web API is faked at `requests.adapters.HTTPAdapter.send`, so the real
-  digest auth runs. A fake must not answer attributes the real client lacks.
+- The web API is faked at `web_transport._exchange`, so the real digest
+  auth runs. Stand-ins for the whole client derive from `conftest.AsyncFake`
+  (plain methods, awaited like the real ones); a patched-in method goes
+  through `conftest.awaitable`. A fake must not answer attributes the real client lacks.
 - Test names are full-sentence behaviour descriptions
   (`test_a_meter_outage_only_takes_the_meter_entities_down`). No test classes.
   A docstring only for the why, for example the issue a fix came from.

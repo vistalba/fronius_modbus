@@ -108,11 +108,17 @@ rules:
 
   # Platinum
   async-dependency:
-    status: todo
-    comment: The web API client is synchronous requests, run in the executor.
+    status: done
+    comment: >-
+      Modbus runs on modbus-connection, the async library of Home Assistant's
+      modbus integration; the web API client is async over aiohttp.
   inject-websession:
-    status: todo
-    comment: The web API client opens its own requests sessions.
+    status: done
+    comment: >-
+      The web API client takes its aiohttp session from outside. The
+      integration passes one session for all entries from
+      async_create_clientsession, with no cookie jar: the client never kept
+      the inverter's cookies, and must not hand them to anything else.
   strict-typing:
     status: todo
     comment: Not every module is in the mypy scope yet (tests/test_mypy_scope.py).

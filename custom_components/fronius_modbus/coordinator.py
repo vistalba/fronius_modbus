@@ -36,8 +36,8 @@ from .fronius_modbus_api.device import (
 from .fronius_modbus_api.exceptions import ControlUnavailable, error_text
 from .fronius_modbus_api.storage import ExtendedMode, StorageControl
 from .fronius_modbus_api.sunspec_models import AcMeter
-from .froniuswebclient import FroniusWebUnreachable
 from .web_control import soc_minimum_login_lost
+from .web_errors import FroniusWebUnreachable
 
 if TYPE_CHECKING:
     from .web_control import FroniusWebControl, WebData

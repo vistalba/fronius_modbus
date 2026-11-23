@@ -29,7 +29,7 @@ from .fronius_modbus_api.exceptions import (
     ControlUnavailable,
     error_text,
 )
-from .froniuswebclient import FroniusWebUnreachable
+from .web_errors import FroniusWebUnreachable
 
 _LOGGER = logging.getLogger(__name__)
 

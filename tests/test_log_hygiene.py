@@ -22,10 +22,8 @@ from custom_components.fronius_modbus.coordinator import (
     FroniusWebCoordinator,
 )
 from custom_components.fronius_modbus.fronius_modbus_api.device import FroniusInverter
-from custom_components.fronius_modbus.froniuswebclient import (
-    FroniusWebResponseError,
-    FroniusWebUnreachable,
-)
+from custom_components.fronius_modbus.froniuswebclient import FroniusWebResponseError
+from custom_components.fronius_modbus.web_errors import FroniusWebUnreachable
 
 from .conftest import INVERTER_UNIT_ID, METER_UNIT_ID
 from .ha_test_plugin import MockConfigEntry
@@ -321,37 +319,64 @@ async def test_a_web_server_error_is_still_an_error(hass, caplog):
     assert _fetch_failure_levels(caplog) == [logging.ERROR]
 
 
-# The one function allowed to call into requests: its errors carry the URL.
-REQUESTS_BOUNDARY = "_http"
+# The only functions allowed to reach aiohttp: its errors carry the URL, and
+# _http turns them into errors that name the error type alone. _exchange makes
+# the one request, _http opens a session where none was passed and calls it.
+HTTP_BOUNDARY = {
+    "request": "_exchange",
+    "ClientSession": "_http",
+    "_exchange": "_http",
+}
 
 
-def _requests_calls_outside_the_boundary(tree: ast.Module) -> list[int]:
+def _http_calls_outside_the_boundary(tree: ast.Module) -> list[int]:
     offences = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name == REQUESTS_BOUNDARY:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [alias.name for alias in node.names]
+            if isinstance(node, ast.ImportFrom):
+                modules.append(node.module or "")
+            if any(name.split(".")[0] == "requests" for name in modules):
+                offences.append(node.lineno)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for call in ast.walk(node):
-            is_requests_call = (
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == "requests"
+            if not isinstance(call, ast.Call):
+                continue
+            func = call.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", "")
             )
-            if is_requests_call:
+            allowed_in = HTTP_BOUNDARY.get(name)
+            if allowed_in is not None and node.name != allowed_in:
                 offences.append(call.lineno)
     return offences
 
 
-def test_requests_is_called_in_one_place():
+def test_the_web_api_is_reached_in_one_place():
     """A second call site bypassed the boundary that strips the host."""
     offences = [
         f"{source.name}:{line}"
         for source in sorted(PACKAGE.rglob("*.py"))
-        for line in _requests_calls_outside_the_boundary(
+        for line in _http_calls_outside_the_boundary(
             ast.parse(source.read_text(encoding="utf-8"))
         )
     ]
     assert offences == []
+
+
+def test_the_boundary_check_sees_a_second_call_site():
+    """A guard that finds nothing must be able to find something."""
+    tree = ast.parse(
+        "import requests\n"
+        "async def elsewhere(session):\n"
+        "    await session.request('get', 'http://192.0.2.1')\n"
+        "    await _exchange(session)\n"
+    )
+
+    assert _http_calls_outside_the_boundary(tree) == [1, 3, 4]
 
 
 def _meter_lines(caplog) -> list[tuple[int, str]]:

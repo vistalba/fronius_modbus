@@ -177,3 +177,25 @@ def test_done_stale_devices_let_the_owner_remove_one():
     if not _done("stale-devices"):
         pytest.skip("not claimed")
     assert "async def async_remove_config_entry_device(" in _source("__init__.py")
+
+
+def test_a_done_async_dependency_leaves_nothing_to_the_executor():
+    """The hint the rule names: the library called through async_add_executor_job."""
+    if not _done("async-dependency"):
+        pytest.skip("not claimed")
+    client = _source("froniuswebclient.py")
+    assert "import requests" not in client
+    assert "import aiohttp" in client
+    for name in ("__init__.py", "config_flow.py", "web_control.py"):
+        source = _source(name)
+        assert "async_add_executor_job" not in source, name
+
+
+def test_a_done_inject_websession_passes_a_session_to_every_client():
+    if not _done("inject-websession"):
+        pytest.skip("not claimed")
+    for name in ("__init__.py", "config_flow.py"):
+        source = _source(name)
+        constructions = source.count("FroniusWebClient(")
+        assert constructions
+        assert source.count("session=async_web_session(hass)") >= constructions, name

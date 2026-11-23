@@ -52,17 +52,6 @@ LINE_BUDGETS = {
     # 1562 + the energy output sensors, whose rows are energy_output_entities.py
     # 1570 + the storage mode select waits for readable registers
     "entities.py": 1570,
-    # 898 + a meter the answer names without a usable address marks the
-    # answer incomplete; the parser shares _body_data,
-    # _clean_text and _as_int with the other payloads, so it stays here.
-    # 907 + an error status keeps the fields the inverter names as refused,
-    # read by the same helper as the refusals in a 200 answer.
-    # 918 + a status page or a soft limit config of another shape is a failed
-    # read, not an AttributeError or KeyError that escapes the client.
-    # 922 + the address to allow is confirmed in the flow, not only resolved.
-    # 923 + a challenge part without a value is refused like a missing one.
-    # 931 + the restriction says whether it already allows an address.
-    "froniuswebclient.py": 931,
     # 916 + a reserve without the web login is refused instead of reaching
     # Modbus alone; the check sits in the write lock, next to the other one.
     # 932 + a cancelled write waits for its thread before it leaves the
@@ -82,7 +71,8 @@ LINE_BUDGETS = {
     # 1110 + the setup step shows the form without the update intervals.
     # 1138 + the serial number as unique id, the host check that no longer
     # reads the host from it, and the split of data and options (1.5).
-    "config_flow.py": 1138,
+    # 1144 + the Modbus write runs shielded: a closed dialog must not cut it.
+    "config_flow.py": 1144,
     # 908: the split of data and options and the login flag kept in the data
     # (1.5); the migration steps belong together.
     "migrations.py": 908,

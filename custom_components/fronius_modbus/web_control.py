@@ -438,14 +438,16 @@ class FroniusWebControl:
             return None
 
     async def _async_until_done(self, func, *args):
-        """Run func in the executor and wait for its end, even when cancelled.
+        """Run func as a task of its own and wait for its end, even when cancelled.
 
-        A thread cannot be stopped: a cancelled caller left the write lock while
-        its thread still posted the old value over a newer write. The outcome of
-        a cancelled caller's thread is taken here: left to the loop, its error
+        A write must not stop halfway: a cancelled caller left the write lock
+        while its executor thread still posted the old value over a newer
+        write, and a cancelled coroutine would stop between the read and the
+        post instead. The task finishes either way, and the outcome of a
+        cancelled caller's task is taken here: left to the loop, its error
         went to the log with the URL in its cause.
         """
-        job = self._hass.async_add_executor_job(func, *args)
+        job = self._hass.async_create_task(func(*args), eager_start=False)
         cancelled: asyncio.CancelledError | None = None
         while not job.done():
             try:
@@ -472,9 +474,7 @@ class FroniusWebControl:
         if client is None:
             return None
         try:
-            return await self._hass.async_add_executor_job(
-                getattr(client, method_name), *args
-            )
+            return await getattr(client, method_name)(*args)
         except FroniusWebAuthError as err:
             await self._async_handle_web_api_auth_failure(err)
             return None

@@ -317,6 +317,8 @@ files = [
   "custom_components/fronius_modbus/flow_forms.py",
   "custom_components/fronius_modbus/export_limit.py",
   "custom_components/fronius_modbus/adoption.py",
+  "custom_components/fronius_modbus/web_session.py",
+  "custom_components/fronius_modbus/web_transport.py",
 ]
 
 # Path tracking rules

@@ -35,10 +35,10 @@ from custom_components.fronius_modbus.froniuswebclient import (
     ENDPOINT_MISSING,
     FroniusWebAuthError,
     FroniusWebClient,
-    FroniusWebUnreachable,
 )
 from custom_components.fronius_modbus.token_store import async_get_token_store
 from custom_components.fronius_modbus.web_control import WebData
+from custom_components.fronius_modbus.web_errors import FroniusWebUnreachable
 from homeassistant.config_entries import SETUP_RETRY_MAX_WAIT, ConfigEntryState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import ServiceValidationError
@@ -51,7 +51,13 @@ from homeassistant.helpers.entity_platform import async_get_platforms
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
-from .conftest import INVERTER_UNIT_ID, METER_UNIT_ID, NO_INVERTER_CAP_W
+from .conftest import (
+    INVERTER_UNIT_ID,
+    METER_UNIT_ID,
+    NO_INVERTER_CAP_W,
+    AsyncFake,
+    awaitable,
+)
 from .ha_test_plugin import (
     MockConfigEntry,
     async_capture_events,
@@ -615,7 +621,7 @@ async def test_options_change_reloads_with_the_new_interval(hass, mock_modbus):
     assert entry.runtime_data.modbus.update_interval.total_seconds() == 30
 
 
-class _FakeWebClientDownAfterMeterInfo:
+class _FakeWebClientDownAfterMeterInfo(AsyncFake):
     """A web client whose meter-info call succeeds but everything else is down."""
 
     def __init__(self, *_args, **_kwargs) -> None:
@@ -850,7 +856,7 @@ async def test_a_refused_chain_keeps_the_storage_entities(hass, mock_modbus):
     assert er.async_get(hass).async_get(entity_id) is not None
 
 
-class _FakeWebClientWithTopology:
+class _FakeWebClientWithTopology(AsyncFake):
     """A web client that serves two meters until `topology` is set to None."""
 
     topology: dict | None = {
@@ -1510,14 +1516,20 @@ async def test_a_reauth_of_a_running_entry_reports_its_success(
 ):
     """A reload during the flow aborts it: the owner saw an error for a login that worked."""
     serve_the_public_endpoints(mock_modbus, monkeypatch)
-    monkeypatch.setattr(config_flow.FroniusWebClient, "login", lambda self: True)
     monkeypatch.setattr(
-        config_flow.FroniusWebClient, "ensure_modbus_enabled", lambda self, *a: True
+        config_flow.FroniusWebClient, "login", awaitable(lambda self: True)
+    )
+    monkeypatch.setattr(
+        config_flow.FroniusWebClient,
+        "ensure_modbus_enabled",
+        awaitable(lambda self, *a: True),
     )
     monkeypatch.setattr(
         config_flow,
         "mint_token",
-        lambda host, user, password: {"realm": "r", "token": "t"},
+        awaitable(
+            lambda host, user, password, **_session: {"realm": "r", "token": "t"}
+        ),
     )
     entry = make_entry(hass, minor_version=14, api_username="customer")
     await setup_entry(hass, entry)

@@ -3,7 +3,6 @@
 import asyncio
 import contextlib
 import inspect
-import threading
 import time
 
 import pytest
@@ -27,10 +26,10 @@ from custom_components.fronius_modbus.froniuswebclient import (
     FroniusWebAuthError,
     FroniusWebClient,
     FroniusWebResponseError,
-    FroniusWebUnreachable,
 )
 from custom_components.fronius_modbus.token_store import async_get_token_store
 from custom_components.fronius_modbus.web_control import FroniusWebControl
+from custom_components.fronius_modbus.web_errors import FroniusWebUnreachable
 from homeassistant.components.diagnostics import (
     _DIAGNOSTICS_DATA,
     DiagnosticsPlatformData,
@@ -38,13 +37,14 @@ from homeassistant.components.diagnostics import (
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
+# A rejected login asks Home Assistant for a new one; here it is only recorded.
+from .conftest import AsyncFake
 from .ha_test_plugin import MockConfigEntry
 
-# A rejected login asks Home Assistant for a new one; here it is only recorded.
 pytestmark = pytest.mark.usefixtures("reauth_requests")
 
 
-class FakeWebClient:
+class FakeWebClient(AsyncFake):
     def __init__(self):
         self.battery = {
             "HYB_EM_MODE": 0,
@@ -107,7 +107,8 @@ class FakeWebClient:
         return dict(self.battery)
 
     def set_soc_limits(self, soc_min=None, soc_max=None):
-        self.check_soc_window(soc_min, soc_max)
+        # The plain method: through the instance it is the awaited stand-in.
+        FakeWebClient.check_soc_window(self, soc_min, soc_max)
         self.calls.append(("soc", soc_min, soc_max))
         limits = {"BAT_M0_SOC_MIN": soc_min, "BAT_M0_SOC_MAX": soc_max}
         self.battery.update({k: v for k, v in limits.items() if v is not None})
@@ -982,42 +983,43 @@ async def test_unloading_cancels_a_pending_confirmation_refresh(control):
 
 
 async def test_a_cancelled_write_cannot_overwrite_a_newer_one(hass, control):
-    """The lock went with the cancelled caller while its thread still held the old value.
+    """The lock went with the cancelled caller while its write still held the old value.
 
     A script stopped mid-write released the lock; the next write finished first,
     then the old thread posted the cancelled value over it.
     """
     await control.async_refresh()
-    entered = threading.Event()
-    gate = threading.Event()
-    overtaken = threading.Event()
-    first_done = threading.Event()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+    overtaken = asyncio.Event()
+    first_done = asyncio.Event()
     real_set = control._client.set_backup_reserve
 
-    def first_one_waits(percent):
+    async def first_one_waits(percent):
         if not entered.is_set():
             entered.set()
-            gate.wait(5)
+            await asyncio.wait_for(gate.wait(), 5)
             try:
-                return real_set(percent)
+                return await real_set(percent)
             finally:
                 first_done.set()
         overtaken.set()
-        return real_set(percent)
+        return await real_set(percent)
 
     control._client.set_backup_reserve = first_one_waits
     cancelled = asyncio.ensure_future(control.set_backup_reserve(20))
-    assert await hass.async_add_executor_job(entered.wait, 5)
+    await asyncio.wait_for(entered.wait(), 5)
     cancelled.cancel()
     await asyncio.sleep(0)
     newer = asyncio.ensure_future(control.set_backup_reserve(80))
     # Long enough for the newer write to reach the device if nothing holds it.
-    await hass.async_add_executor_job(overtaken.wait, 1)
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(overtaken.wait(), 1)
     gate.set()
     await newer
     with contextlib.suppress(asyncio.CancelledError):
         await cancelled
-    assert await hass.async_add_executor_job(first_done.wait, 5)
+    await asyncio.wait_for(first_done.wait(), 5)
 
     reserves = [c[1] for c in control._client.calls if c[0] == "reserve"]
     assert reserves[-1] == 80, reserves
@@ -1085,14 +1087,14 @@ async def test_a_reserve_with_the_battery_config_read_in_auto_goes_to_modbus(con
 async def test_a_write_that_fails_after_its_caller_was_cancelled_is_not_logged_raw(
     hass, control
 ):
-    """The loop reported the thread's exception, whose cause names the URL."""
+    """The loop reported the write's exception, whose cause names the URL."""
     await control.async_refresh()
-    entered = threading.Event()
-    gate = threading.Event()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
 
-    def fails_late(percent):
+    async def fails_late(percent):
         entered.set()
-        gate.wait(5)
+        await asyncio.wait_for(gate.wait(), 5)
         raise FroniusWebUnreachable("ConnectTimeout")
 
     control._client.set_backup_reserve = fails_late
@@ -1101,7 +1103,7 @@ async def test_a_write_that_fails_after_its_caller_was_cancelled_is_not_logged_r
     hass.loop.set_exception_handler(lambda _loop, context: reported.append(context))
     try:
         caller = asyncio.ensure_future(control.set_backup_reserve(20))
-        assert await hass.async_add_executor_job(entered.wait, 5)
+        await asyncio.wait_for(entered.wait(), 5)
         caller.cancel()
         await asyncio.sleep(0)
         gate.set()
@@ -1119,17 +1121,17 @@ async def test_a_login_refused_after_its_caller_was_cancelled_asks_to_log_in_aga
 ):
     """The refusal was only logged, and the web API stayed on until the next poll."""
     await control.async_refresh()
-    entered = threading.Event()
-    gate = threading.Event()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
 
-    def refused_late(percent):
+    async def refused_late(percent):
         entered.set()
-        gate.wait(5)
+        await asyncio.wait_for(gate.wait(), 5)
         raise FroniusWebAuthError("token rejected")
 
     control._client.set_backup_reserve = refused_late
     caller = asyncio.ensure_future(control.set_backup_reserve(20))
-    assert await hass.async_add_executor_job(entered.wait, 5)
+    await asyncio.wait_for(entered.wait(), 5)
     caller.cancel()
     await asyncio.sleep(0)
     gate.set()
@@ -1158,18 +1160,18 @@ async def test_a_cancel_while_the_token_is_deleted_still_asks_to_log_in_again(
         return await delete(self, *args, **kwargs)
 
     monkeypatch.setattr(type(store), "async_delete_token", slow_delete)
-    entered = threading.Event()
-    gate = threading.Event()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
 
-    def refused(percent):
+    async def refused(percent):
         entered.set()
         if late:
-            gate.wait(5)
+            await asyncio.wait_for(gate.wait(), 5)
         raise FroniusWebAuthError("token rejected")
 
     control._client.set_backup_reserve = refused
     caller = asyncio.ensure_future(control.set_backup_reserve(20))
-    assert await hass.async_add_executor_job(entered.wait, 5)
+    await asyncio.wait_for(entered.wait(), 5)
     if late:
         caller.cancel()
         await asyncio.sleep(0)
@@ -1186,19 +1188,19 @@ async def test_a_cancel_while_the_token_is_deleted_still_asks_to_log_in_again(
 async def test_a_queued_write_still_writes_when_a_newer_one_is_cancelled(hass, control):
     """The cancelled caller's newer ticket made the queued one return unwritten."""
     await control.async_refresh()
-    entered = threading.Event()
-    gate = threading.Event()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
     real_set = control._client.set_backup_reserve
 
-    def first_one_waits(percent):
+    async def first_one_waits(percent):
         if not entered.is_set():
             entered.set()
-            gate.wait(5)
-        return real_set(percent)
+            await asyncio.wait_for(gate.wait(), 5)
+        return await real_set(percent)
 
     control._client.set_backup_reserve = first_one_waits
     first = asyncio.ensure_future(control.set_backup_reserve(20))
-    assert await hass.async_add_executor_job(entered.wait, 5)
+    await asyncio.wait_for(entered.wait(), 5)
     queued = asyncio.ensure_future(control.set_backup_reserve(40))
     newer = asyncio.ensure_future(control.set_backup_reserve(60))
     await asyncio.sleep(0)
