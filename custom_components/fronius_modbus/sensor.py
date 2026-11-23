@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import UNKNOWN_STATE
 from .coordinator import FroniusConfigEntry, FroniusMeterPowerCoordinator
 from .entities import FroniusSensorDescription, sensor_descriptions
 from .entity import FroniusEntity, FroniusTotalSensor
+from .mppt_entities import left_out_mppt_keys
 
 # The coordinator polls; entities never fetch on their own.
 PARALLEL_UPDATES = 0
@@ -100,9 +101,33 @@ async def async_setup_entry(
     entry: FroniusConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Add every sensor the current runtime produces."""
+    """Add every sensor the current runtime produces, and a string's once it is lit.
+
+    An MPPT string dark at setup sends no value, so its sensors wait for the
+    first one and are added then, without a reload (quality scale
+    dynamic-devices). The waiting keys are taken together with the first
+    descriptions, with nothing awaited in between: a poll there would light a
+    string neither of them saw.
+    """
     runtime = entry.runtime_data
-    async_add_entities(
-        FroniusSensor.create(runtime, entry, description)
-        for description in sensor_descriptions(runtime)
-    )
+    waiting = set(left_out_mppt_keys(runtime))
+
+    @callback
+    def _add(keys: set[str] | None = None) -> None:
+        async_add_entities(
+            FroniusSensor.create(runtime, entry, description)
+            for description in sensor_descriptions(runtime)
+            if keys is None or description.key in keys
+        )
+
+    @callback
+    def _add_lit_strings() -> None:
+        lit = waiting - left_out_mppt_keys(runtime)
+        if not lit:
+            return
+        waiting.difference_update(lit)
+        _add(lit)
+
+    _add()
+    if waiting:
+        entry.async_on_unload(runtime.modbus.async_add_listener(_add_lit_strings))

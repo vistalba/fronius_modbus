@@ -43,7 +43,6 @@ from .flow_entry import async_adopt_serial_unique_id
 from .fronius_modbus_api.device import FroniusInverter
 from .froniuswebclient import FroniusWebClient
 from .meter_topology import MeterTopology, parse_meter_topology
-from .mppt_entities import left_out_mppt_keys
 from .token_store import async_forget_unused_tokens
 from .web_control import BATTERY_WRITE_MODBUS_RECOVERY_SECONDS, FroniusWebControl
 
@@ -90,34 +89,6 @@ async def _async_meter_topology(
         public_client.get_power_meter_info, DEFAULT_METER_UNIT_ID
     )
     return parse_meter_topology(info)
-
-
-@callback
-def _async_reload_when_a_string_lights_up(
-    hass: HomeAssistant, entry: FroniusConfigEntry, left_out: frozenset[str]
-) -> None:
-    """Reload once an MPPT string dark at setup sends its first value.
-
-    Its sensors were left out for want of a value; without the reload they
-    came only with the next restart. ``left_out`` is taken
-    before the platforms set up: a poll during their setup lit a string
-    unseen.
-    """
-    if not left_out:
-        return
-    runtime = entry.runtime_data
-    scheduled = False
-
-    @callback
-    def _check() -> None:
-        nonlocal scheduled
-        if scheduled or not left_out - left_out_mppt_keys(runtime):
-            return
-        scheduled = True
-        hass.config_entries.async_schedule_reload(entry.entry_id)
-
-    entry.async_on_unload(runtime.modbus.async_add_listener(_check))
-    _check()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> bool:
@@ -250,9 +221,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FroniusConfigEntry) -> b
     )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
-    left_out = left_out_mppt_keys(entry.runtime_data)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _async_reload_when_a_string_lights_up(hass, entry, left_out)
     if web is not None:
         web_poll = web
 

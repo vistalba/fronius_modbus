@@ -84,10 +84,14 @@ rules:
   docs-troubleshooting: done
   docs-use-cases: done
   dynamic-devices:
-    status: todo
+    status: done
     comment: >-
-      An MPPT string dark at setup, a sub-system answering for the first time
-      and a meter the web API names later reload the entry on their own.
+      An MPPT string dark at setup gets its sensors in place once it sends a
+      value. A battery, meter or other sub-system that answers for the first
+      time after setup, and a meter the web API names later, reload the entry
+      on their own, with no action of the owner: they need new Modbus units and
+      the adoption of entities from earlier versions that only setup runs, and
+      a reload is what keeps those entities' history.
   entity-category: done
   entity-device-class: done
   entity-disabled-by-default: done

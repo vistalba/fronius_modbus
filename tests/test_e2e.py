@@ -351,7 +351,7 @@ async def test_minor_version_9_entries_migrate_to_the_current_shape(hass, mock_m
 async def test_a_string_dark_at_the_first_setup_gets_its_sensor_once_lit(
     hass, mock_modbus, monkeypatch, symo_gen24
 ):
-    """Set up at night, a string got no power sensor until a reload."""
+    """Set up at night, a string got no power sensor until a restart."""
     await log_in_to_the_web_api(hass, mock_modbus, monkeypatch)
     probe = make_entry(hass)
     await setup_entry(hass, probe)
@@ -370,14 +370,18 @@ async def test_a_string_dark_at_the_first_setup_gets_its_sensor_once_lit(
     await runtime.modbus.async_refresh()
     await hass.async_block_till_done()
     assert entry.runtime_data is runtime, "a poll still in the dark reloaded"
+    assert registry.async_get_entity_id("sensor", DOMAIN, unique_id) is None
 
-    # The live unit for the next poll, the fixture for the reload after it.
     mock_modbus.unit(INVERTER_UNIT_ID).holding[address] = daylight
     holding[address] = daylight
     await entry.runtime_data.modbus.async_refresh()
     await hass.async_block_till_done()
 
-    assert registry.async_get_entity_id("sensor", DOMAIN, unique_id) is not None
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+    assert entity_id is not None
+    assert hass.states.get(entity_id).state not in ("unavailable", "unknown")
+    # Added in place: the quality scale's dynamic-devices asks for no reload.
+    assert entry.runtime_data is runtime
 
 
 async def test_a_string_lit_while_the_platforms_set_up_gets_its_sensor(

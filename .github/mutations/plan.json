@@ -2128,17 +2128,17 @@
     "tests": "the_other_side_cannot_be_read"
   },
   {
-    "label": "setup: a string lit after setup reloads the entry",
-    "path": "custom_components/fronius_modbus/__init__.py",
-    "old": "        scheduled = True\n        hass.config_entries.async_schedule_reload(entry.entry_id)\n",
-    "new": "        scheduled = True\n",
+    "label": "mppt: a string lit after setup gets its sensors without a reload",
+    "path": "custom_components/fronius_modbus/sensor.py",
+    "old": "        waiting.difference_update(lit)\n        _add(lit)\n",
+    "new": "        waiting.difference_update(lit)\n",
     "tests": "gets_its_sensor_once_lit"
   },
   {
-    "label": "setup: only a string that sends a value reloads",
-    "path": "custom_components/fronius_modbus/__init__.py",
-    "old": "        if scheduled or not left_out - left_out_mppt_keys(runtime):\n",
-    "new": "        if scheduled:\n",
+    "label": "mppt: only a string that sends a value gets its sensors",
+    "path": "custom_components/fronius_modbus/sensor.py",
+    "old": "        lit = waiting - left_out_mppt_keys(runtime)\n",
+    "new": "        lit = set(waiting)\n",
     "tests": "gets_its_sensor_once_lit"
   },
   {
@@ -2219,18 +2219,11 @@
     "tests": "blocks_both_ways_is_refused"
   },
   {
-    "label": "mppt: a string lit during the platform setup is checked at once",
-    "path": "custom_components/fronius_modbus/__init__.py",
-    "old": "    entry.async_on_unload(runtime.modbus.async_add_listener(_check))\n    _check()\n",
-    "new": "    entry.async_on_unload(runtime.modbus.async_add_listener(_check))\n",
-    "tests": "lit_while_the_platforms_set_up"
-  },
-  {
-    "label": "mppt: the strings left out are taken before the platform setup",
-    "path": "custom_components/fronius_modbus/__init__.py",
-    "old": "    left_out = left_out_mppt_keys(entry.runtime_data)\n    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)\n",
-    "new": "    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)\n    left_out = left_out_mppt_keys(entry.runtime_data)\n",
-    "tests": "lit_while_the_platforms_set_up"
+    "label": "mppt: the platform follows the poll for a dark string",
+    "path": "custom_components/fronius_modbus/sensor.py",
+    "old": "        entry.async_on_unload(runtime.modbus.async_add_listener(_add_lit_strings))\n",
+    "new": "",
+    "tests": "lit_while_the_platforms_set_up or gets_its_sensor_once_lit"
   },
   {
     "label": "migrations: a role the owner chose stands at the upgrade",

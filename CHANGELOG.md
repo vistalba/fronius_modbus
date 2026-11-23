@@ -7,6 +7,7 @@
 - The README describes every setup field and option, how and how often the values are updated, use cases, automation examples and the known limitations.
 
 ### Changed
+- An MPPT string that was dark when Home Assistant started gets its sensors as soon as it sends a value, without reloading the entry.
 - An entry is recognised by its inverter's serial number instead of its address. Existing entries switch on their next start, nothing else changes for them; an inverter set up twice keeps both entries as they are.
 - The update intervals are stored apart from the connection settings. Existing entries are converted on the first start with every value kept; going back to 1.4.1 reads the same settings.
 - A new setup no longer asks for the update intervals: the entry starts with the defaults (Modbus 10 s, web API 60 s, grid meter power with the Modbus poll), and *Configure* changes them as before. Existing entries keep their intervals.

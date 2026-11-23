@@ -98,9 +98,12 @@ All paths below are under `custom_components/fronius_modbus/`.
 - Setup order in `__init__.async_setup_entry` is load-bearing: token, web
   client, meter topology, units, first Modbus refresh, web refresh, runtime
   data, adoption, migrations, cleanup, platforms.
-- The entity set changes only through an **entry reload**. The coordinator
-  schedules one when a sub-system answers for the first time, the SunSpec map
-  shifts, the device identity changes, or a meter topology is confirmed.
+- The entity set changes through an **entry reload**, with one exception: the
+  sensors of an MPPT string dark at setup are added in place by the sensor
+  platform once the string sends a value. The coordinator schedules a reload
+  when a sub-system answers for the first time, the SunSpec map shifts, the
+  device identity changes, or a meter topology is confirmed: those need setup's
+  adoption of legacy entities.
 - Every write goes through `FroniusEntity.async_run_write`, which maps
   `ControlRefused` to `ServiceValidationError` and `ControlUnavailable` or a
   Modbus error to `HomeAssistantError`.
